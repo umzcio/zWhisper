@@ -12,7 +12,9 @@ final class StatusItemController {
         self.onToggle = onToggle
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "zWhisper")
+            button.image = NSImage(named: "zMenubarIcon")
+            button.image?.isTemplate = true
+            button.image?.accessibilityDescription = "zWhisper"
             button.action = #selector(handleClick)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
