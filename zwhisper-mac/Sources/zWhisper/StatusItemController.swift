@@ -13,6 +13,7 @@ final class StatusItemController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(named: "zMenubarIcon")
+            button.image?.size = NSSize(width: 19, height: 19)
             button.image?.isTemplate = true
             button.image?.accessibilityDescription = "zWhisper"
             button.action = #selector(handleClick)
