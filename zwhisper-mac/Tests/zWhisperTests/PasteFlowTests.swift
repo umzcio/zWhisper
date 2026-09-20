@@ -110,13 +110,14 @@ struct PasteFlowTests {
         #expect(paste.undoCalls == 1)
     }
 
-    @Test("empty transcript: no paste, no history entry (silent dictation is a no-op)")
+    @Test("empty transcript: no paste, no history entry — and the flow closes")
     func emptyTranscript() async throws {
         let (state, _, transcription, paste) = await makeState()
         await transcription.setFinalResult(Transcript(text: "", segments: []))
         await dictate(state)
         try await Task.sleep(for: .milliseconds(300))
         #expect(state.phase == .idle)
+        #expect(!state.isPopoverOpen)
         #expect(paste.pastedText == nil)
         #expect(state.history.isEmpty)
     }

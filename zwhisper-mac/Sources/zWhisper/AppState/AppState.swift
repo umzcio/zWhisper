@@ -741,12 +741,14 @@ final class AppState {
     /// history entry, result toast (6s), popover closes 700ms after pasted.
     private func pasteAndFinish(raw: String, processed: String, mode: Mode, reprocess: Bool) async {
         // Nothing usable came back (silence, hallucination-free empty pass):
-        // no paste, no history entry (§4: cancel-like no-op).
+        // no paste, no history entry (§4: cancel-like no-op) — but the flow
+        // is over, so close/collapse like any other completion.
         guard !processed.isEmpty else {
             if let path = lastAudioPath {
                 Task { await persistence.deleteFile(path) }
             }
             phase = .idle
+            dismissPopover()
             return
         }
         phase = .pasting
