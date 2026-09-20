@@ -25,6 +25,14 @@ struct PopoverContentView: View {
     }
 
     var body: some View {
+        if appState.isDocked {
+            DockedIndicatorView(appState: appState)
+        } else {
+            standardChrome
+        }
+    }
+
+    private var standardChrome: some View {
         ZStack(alignment: .top) {
             // Watermark logo: 64px, 3% opacity, top-center (§3.1)
             Image(systemName: "waveform")

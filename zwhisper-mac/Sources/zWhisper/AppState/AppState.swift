@@ -631,6 +631,9 @@ final class AppState {
             }
             phase = .recording(startedAt: .now)
             ZWSoundEffects.play(.recordStart, style: settings.soundEffectsStyle)
+            if isDocked {
+                popover?.animateDockedFrame(expanded: true)
+            }
             partialText = ""
             transcriptText = ""
             processedText = ""
@@ -915,10 +918,7 @@ final class AppState {
         // Docked indicator placement (SuperWhisper-style bottom-right pill).
         popover?.placement = settings.popoverPlacement
         if isDocked {
-            if popoverSize != .mini {
-                popoverSize = .mini
-                popover?.animateFrame(to: .mini)
-            }
+            popover?.animateDockedFrame(expanded: false)
             popover?.presentPersistent()
             popoverAppeared = true
         } else if !isPopoverOpen {
@@ -968,19 +968,18 @@ final class AppState {
         setModeDigitsEnabled?(false)
         setEscapeHotkeyEnabled?(false)
         if isDocked {
-            // Docked indicator: collapse to the idle mini pill, never hide.
-            if popoverSize != .mini {
-                popoverSize = .mini
-                popover?.animateFrame(to: .mini)
-            }
+            // Docked indicator: collapse to the rest pill, never hide.
+            popover?.animateDockedFrame(expanded: false)
             return
         }
         withAnimation(Self.popAnimation) { popoverAppeared = false }
         popover?.dismissAfterExitAnimation()
     }
 
-    /// Spec §3.1: double-click or the chevron toggle switches Main ↔ Mini.
+    /// Spec §3.1: double-click or the chevron toggle switches Main ↔ Mini
+    /// (floating placement only — the docked pill has its own two states).
     func togglePopoverSize() {
+        guard !isDocked else { return }
         popoverSize = popoverSize == .main ? .mini : .main
         popover?.animateFrame(to: popoverSize)
     }

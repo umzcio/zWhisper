@@ -6,8 +6,10 @@ import SwiftUI
 /// RMS from the audio tap (architecture §5) via AppState.currentLevel.
 struct WaveformView: View {
     let appState: AppState
-    /// 48 bars (Main) / 28 bars (Mini) per spec §3.1.
+    /// 48 bars (Main) / 28 bars (Mini) per spec §3.1; 34 for the docked pill.
     let barCount: Int
+    /// Docked indicator: clean white bars instead of the §2.6 gradient.
+    var monochrome = false
 
     private var isRecording: Bool {
         if case .recording = appState.phase { return true }
@@ -33,7 +35,9 @@ struct WaveformView: View {
                 let totalWidth = CGFloat(barCount) * 4 + CGFloat(barCount - 1) * 6
                 let originX = (size.width - totalWidth) / 2
                 let shading: GraphicsContext.Shading
-                if isRecording || appState.waveform.state == .settling {
+                if monochrome {
+                    shading = .color(isRecording || appState.waveform.state == .settling ? ZWColor.text1 : ZWColor.text3)
+                } else if isRecording || appState.waveform.state == .settling {
                     // §2.6 recording gradient: #30D158 → #64D2FF, left → right
                     shading = .linearGradient(
                         Gradient(colors: [ZWColor.accentGreen, ZWColor.accentTeal]),

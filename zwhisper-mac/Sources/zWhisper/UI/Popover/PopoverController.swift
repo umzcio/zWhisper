@@ -9,6 +9,9 @@ final class PopoverController {
     /// §3.1 sizes: Main 420×240, Mini 220×64.
     static let mainSize = NSSize(width: 420, height: 240)
     static let miniSize = NSSize(width: 220, height: 64)
+    /// Docked indicator states: rest pill / expanded recording pill.
+    static let dockedRestSize = NSSize(width: 104, height: 44)
+    static let dockedActiveSize = NSSize(width: 320, height: 48)
 
     private let panel: NSPanel
     private weak var appState: AppState?
@@ -116,8 +119,28 @@ final class PopoverController {
     /// anchor the §3.4 ModeSwitcher panel below-left of the pill.
     func modePillScreenRect() -> NSRect {
         let frame = panel.frame
+        if placement == .bottomRight {
+            // Docked rest pill: glyph sits at left + 12, 24px tall.
+            return NSRect(x: frame.minX + 12, y: frame.maxY - 12 - 24, width: 1, height: 24)
+        }
         // Top row: padding 12 → context dot (12) → spacing 8 → pill (~22px tall).
         return NSRect(x: frame.minX + 32, y: frame.maxY - 12 - 22, width: 1, height: 22)
+    }
+
+    /// Docked indicator frame for the rest / expanded recording states.
+    func animateDockedFrame(expanded: Bool) {
+        let newSize = expanded ? Self.dockedActiveSize : Self.dockedRestSize
+        let old = panel.frame
+        guard old.size != newSize else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.31
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(
+                NSRect(origin: dockedOrigin(for: newSize), size: newSize),
+                display: true
+            )
+        }
+        hasBeenPositioned = true
     }
 
     private func reposition(animated: Bool) {
