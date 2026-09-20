@@ -41,6 +41,12 @@ struct DockedIndicatorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Expand window") { appState.expandDockedWindow() }
+            Divider()
+            Button("Open History…") { WindowActions.showHistory() }
+            Button("Open Settings…") { WindowActions.showSettings() }
+        }
     }
 
     // MARK: Rest — tiny pill: glyph + quiet bars. Tap body to record.

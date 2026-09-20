@@ -932,6 +932,19 @@ final class AppState {
         settings.popoverPlacement == .bottomRight
     }
 
+    /// The docked pill is temporarily expanded to the full §3.1 popover
+    /// (right-click → "Expand window"); dismiss collapses back to the pill.
+    private(set) var dockedExpanded = false
+
+    /// Right-click "Expand window": opens the full popover at dock level.
+    func expandDockedWindow() {
+        guard isDocked, !dockedExpanded else { return }
+        dockedExpanded = true
+        popoverSize = .main
+        popover?.animateFrame(to: .main)
+        summonPopover()
+    }
+
     private func applyAudioSettings() {
         let normalization = settings.dynamicNormalization
         let removal = settings.silenceRemoval
@@ -969,6 +982,7 @@ final class AppState {
         setEscapeHotkeyEnabled?(false)
         if isDocked {
             // Docked indicator: collapse to the rest pill, never hide.
+            dockedExpanded = false
             popover?.animateDockedFrame(expanded: false)
             return
         }

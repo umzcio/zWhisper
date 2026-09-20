@@ -169,14 +169,15 @@ final class PopoverController {
         hasBeenPositioned = true
     }
 
-    /// Docked indicator: bottom-right of the screen, 24px margins above
-    /// `visibleFrame` (clears a visible Dock).
+    /// Docked indicator: pinned at dock-icon level — bottom-right of the
+    /// physical screen, slightly overlapping the Dock's trailing edge so it
+    /// reads as part of the Dock row.
     private func dockedOrigin(for size: NSSize) -> NSPoint {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return .zero }
-        let frame = screen.visibleFrame
+        let frame = screen.frame
         return NSPoint(
-            x: frame.maxX - size.width - 24,
-            y: frame.minY + 24
+            x: frame.maxX - size.width - 12,
+            y: frame.minY + 8
         )
     }
 }

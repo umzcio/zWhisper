@@ -25,7 +25,7 @@ struct PopoverContentView: View {
     }
 
     var body: some View {
-        if appState.isDocked {
+        if appState.isDocked, !appState.dockedExpanded {
             DockedIndicatorView(appState: appState)
         } else {
             standardChrome
