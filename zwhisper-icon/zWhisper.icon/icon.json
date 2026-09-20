@@ -1,0 +1,42 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.00000,0.00000,0.00000,1.00000",
+      "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "umzcio_audio_sound_waves_in_the_shape_of_the_letter_z_--ar_43_4be88beb-e12c-46a0-88c3-ce7b35cf0a18_1.png",
+          "name" : "umzcio_audio_sound_waves_in_the_shape_of_the_letter_z_--ar_43_4be88beb-e12c-46a0-88c3-ce7b35cf0a18_1",
+          "position" : {
+            "scale" : 0.6,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

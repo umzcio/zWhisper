@@ -1,0 +1,89 @@
+name: zWhisper
+options:
+  bundleIdPrefix: app.zwhisper
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  # Architecture §2 — SPM pins
+  WhisperKit:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    from: 1.0.0
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 2.0.0
+  LaunchAtLogin:
+    url: https://github.com/sindresorhus/LaunchAtLogin-Modern
+    from: 1.0.0
+  # Sparkle: direct distribution only (architecture §2) — excluded from any MAS build.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.0.0
+targets:
+  zWhisper:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/zWhisper
+      - path: Sources/zWhisper/Assets.xcassets
+    info:
+      path: zWhisper-Info.plist
+      properties:
+        CFBundleName: zWhisper
+        CFBundleDisplayName: zWhisper
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        NSMicrophoneUsageDescription: zWhisper needs microphone access to record and transcribe your dictation.
+        # Placeholders — set to the real appcast feed + EdDSA key before release (README checklist).
+        SUFeedURL: https://example.com/zwhisper/appcast.xml
+        SUPublicEDKey: PLACEHOLDER_EDDSA_PUBLIC_KEY
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.zwhisper.zWhisper
+        PRODUCT_NAME: zWhisper
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        # KeyboardShortcuts runtime requirement (architecture §2 / risk 10.7)
+        OTHER_LDFLAGS: $(inherited) -weak_framework Combine
+    dependencies:
+      - package: WhisperKit
+        product: WhisperKit
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+      - package: LaunchAtLogin
+        product: LaunchAtLogin
+      - package: Sparkle
+        product: Sparkle
+    preBuildScripts:
+      - name: Assert Combine weak-link flag
+        script: |
+          case "$OTHER_LDFLAGS" in
+            *"-weak_framework Combine"*) ;;
+            *) echo "error: OTHER_LDFLAGS must contain '-weak_framework Combine' (KeyboardShortcuts requirement — architecture risk 10.7)" >&2; exit 1 ;;
+          esac
+        basedOnDependencyAnalysis: false
+  zWhisperTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/zWhisperTests
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/zWhisper.app/Contents/MacOS/zWhisper
+    dependencies:
+      - target: zWhisper
