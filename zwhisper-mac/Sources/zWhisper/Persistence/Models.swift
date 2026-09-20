@@ -73,6 +73,13 @@ struct SettingsStore: Codable, Equatable, Sendable {
     var language = "auto"
     /// §6.6 Language: translate-to-English switch (Whisper translate task).
     var translateToEnglish = false
+    /// Where the dictation indicator lives: floating top-center (default) or a
+    /// persistent compact pill docked at the bottom-right above the Dock.
+    var popoverPlacement: PopoverPlacement = .top
+
+    enum PopoverPlacement: String, Codable, Sendable {
+        case top, bottomRight
+    }
 
     enum Theme: String, Codable, Sendable {
         case light, dark, system

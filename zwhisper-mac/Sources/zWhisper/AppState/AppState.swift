@@ -797,8 +797,9 @@ final class AppState {
             try? await Task.sleep(for: .milliseconds(700))
             guard let self, case .pasted = self.phase else { return }
             self.phase = .idle
-            // §6.6 "Always close window after dictation"
-            if self.settings.alwaysCloseWindowAfterDictation {
+            // §6.6 "Always close window after dictation"; the docked indicator
+            // always collapses (otherwise Esc/⌘-digits would stay claimed at idle).
+            if self.settings.alwaysCloseWindowAfterDictation || self.isDocked {
                 self.dismissPopover(style: .pasted)
             }
         }
@@ -910,6 +911,25 @@ final class AppState {
         let code = settings.language == "auto" ? nil : settings.language
         let translate = settings.translateToEnglish
         Task { await transcription.setLanguage(code, translateToEnglish: translate) }
+
+        // Docked indicator placement (SuperWhisper-style bottom-right pill).
+        popover?.placement = settings.popoverPlacement
+        if isDocked {
+            if popoverSize != .mini {
+                popoverSize = .mini
+                popover?.animateFrame(to: .mini)
+            }
+            popover?.presentPersistent()
+            popoverAppeared = true
+        } else if !isPopoverOpen {
+            popoverAppeared = false
+            popover?.dismissAfterExitAnimation()
+        }
+    }
+
+    /// Docked indicator mode: a persistent mini pill at the bottom-right.
+    var isDocked: Bool {
+        settings.popoverPlacement == .bottomRight
     }
 
     private func applyAudioSettings() {
@@ -947,6 +967,14 @@ final class AppState {
         popoverExitStyle = style
         setModeDigitsEnabled?(false)
         setEscapeHotkeyEnabled?(false)
+        if isDocked {
+            // Docked indicator: collapse to the idle mini pill, never hide.
+            if popoverSize != .mini {
+                popoverSize = .mini
+                popover?.animateFrame(to: .mini)
+            }
+            return
+        }
         withAnimation(Self.popAnimation) { popoverAppeared = false }
         popover?.dismissAfterExitAnimation()
     }

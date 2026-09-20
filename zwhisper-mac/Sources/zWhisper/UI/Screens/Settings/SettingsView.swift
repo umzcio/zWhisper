@@ -212,6 +212,15 @@ private struct GeneralPane: View {
                     .pickerStyle(.segmented)
                     .frame(width: 216)
                 }
+                SettingsRow(label: "Dictation indicator", caption: "Floating popover, or a compact pill pinned above your Dock.", infoTip: nil, showsSeparator: true) {
+                    Picker("", selection: $appState.settings.popoverPlacement) {
+                        Text("Top center").tag(SettingsStore.PopoverPlacement.top)
+                        Text("Docked").tag(SettingsStore.PopoverPlacement.bottomRight)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 216)
+                }
                 SettingsRow(
                     label: "Sound effects style",
                     caption: "Played on toggles and confirmations across the app.",

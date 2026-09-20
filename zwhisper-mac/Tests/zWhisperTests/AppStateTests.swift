@@ -75,4 +75,20 @@ struct AppStateTests {
         state.dismissPopover()
         #expect(calls == [true, false])
     }
+
+    @Test("docked indicator: dismiss collapses to idle mini instead of hiding")
+    func dockedCollapse() {
+        let state = AppState()
+        state.settings.popoverPlacement = .bottomRight
+        var escCalls: [Bool] = []
+        state.setEscapeHotkeyEnabled = { escCalls.append($0) }
+        state.summonPopover()
+        #expect(state.isPopoverOpen)
+        state.dismissPopover()
+        #expect(!state.isPopoverOpen)
+        #expect(escCalls == [true, false])
+        // Docked: the panel stays presented (no hide animation, mini size).
+        #expect(state.popoverSize == .mini)
+        #expect(state.isDocked)
+    }
 }

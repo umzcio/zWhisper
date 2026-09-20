@@ -14,6 +14,16 @@ final class PopoverController {
     private weak var appState: AppState?
     private var hasBeenPositioned = false
 
+    /// Floating top-center (§3.1) or persistent bottom-right docked indicator.
+    var placement: SettingsStore.PopoverPlacement = .top {
+        didSet {
+            if placement != oldValue {
+                hasBeenPositioned = false
+                reposition(animated: true)
+            }
+        }
+    }
+
     init(appState: AppState) {
         self.appState = appState
 
@@ -59,9 +69,15 @@ final class PopoverController {
     /// AppState then plays the SPRING_POP summon animation.
     func present() {
         if !hasBeenPositioned {
-            positionTopCenter()
-            hasBeenPositioned = true
+            reposition(animated: false)
         }
+        panel.orderFrontRegardless()
+    }
+
+    /// Shows the persistent docked indicator (idle mini) at launch / on
+    /// placement change — no summon semantics.
+    func presentPersistent() {
+        reposition(animated: false)
         panel.orderFrontRegardless()
     }
 
@@ -74,22 +90,26 @@ final class PopoverController {
         }
     }
 
-    /// Animated Main ↔ Mini frame change (§3.1), anchored top-center.
+    /// Animated Main ↔ Mini frame change (§3.1), anchored per placement.
     func animateFrame(to size: AppState.PopoverSize) {
         let newSize = size == .main ? Self.mainSize : Self.miniSize
         let old = panel.frame
         guard old.size != newSize else { return }
-        let newFrame = NSRect(
-            x: old.midX - newSize.width / 2,
-            y: old.maxY - newSize.height,
-            width: newSize.width,
-            height: newSize.height
-        )
+        let origin: NSPoint
+        if placement == .bottomRight {
+            origin = dockedOrigin(for: newSize)
+        } else {
+            origin = NSPoint(
+                x: old.midX - newSize.width / 2,
+                y: old.maxY - newSize.height
+            )
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.31
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(newFrame, display: true)
+            panel.animator().setFrame(NSRect(origin: origin, size: newSize), display: true)
         }
+        hasBeenPositioned = true
     }
 
     /// Screen rect of the mode pill (fixed slot in the top row), used to
@@ -100,15 +120,41 @@ final class PopoverController {
         return NSRect(x: frame.minX + 32, y: frame.maxY - 12 - 22, width: 1, height: 22)
     }
 
-    /// Spec §3.1: top-center of the screen, 40px below the menu bar.
-    private func positionTopCenter() {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+    private func reposition(animated: Bool) {
+        let size = panel.frame.size
+        let origin: NSPoint
+        if placement == .bottomRight {
+            origin = dockedOrigin(for: size)
+        } else {
+            // Spec §3.1: top-center of the screen, 40px below the menu bar.
+            guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+            let frame = screen.visibleFrame
+            origin = NSPoint(
+                x: frame.midX - size.width / 2,
+                y: frame.maxY - size.height - 40
+            )
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.31
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().setFrameOrigin(origin)
+            }
+        } else {
+            panel.setFrameOrigin(origin)
+        }
+        hasBeenPositioned = true
+    }
+
+    /// Docked indicator: bottom-right of the screen, 24px margins above
+    /// `visibleFrame` (clears a visible Dock).
+    private func dockedOrigin(for size: NSSize) -> NSPoint {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return .zero }
         let frame = screen.visibleFrame
-        let origin = NSPoint(
-            x: frame.midX - panel.frame.width / 2,
-            y: frame.maxY - panel.frame.height - 40
+        return NSPoint(
+            x: frame.maxX - size.width - 24,
+            y: frame.minY + 24
         )
-        panel.setFrameOrigin(origin)
     }
 }
 
