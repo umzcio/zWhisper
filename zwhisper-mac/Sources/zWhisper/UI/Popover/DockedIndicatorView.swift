@@ -54,9 +54,8 @@ struct DockedIndicatorView: View {
     private var restRow: some View {
         HStack(spacing: 10) {
             Button { appState.toggleSwitcher() } label: {
-                AnimatedLogoView()
-                    .frame(width: 22, height: 22)
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                ZWAppIcon(size: 20)
+                    .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
             .buttonStyle(ZWButtonStyle(hoverScale: 1.08, pressScale: 0.92))
@@ -75,6 +74,11 @@ struct DockedIndicatorView: View {
 
     private var recordingRow: some View {
         HStack(spacing: 12) {
+            // The animated Z plays only while a dictation is running.
+            AnimatedLogoView()
+                .frame(width: 22, height: 22)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+
             Button(action: appState.stopDictation) {
                 Image(systemName: "square.fill")
                     .font(.system(size: 11))
