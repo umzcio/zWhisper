@@ -11,10 +11,10 @@ final class StatusItemController {
     init(onToggle: @escaping () -> Void) {
         self.onToggle = onToggle
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.length = 27
+        statusItem.length = 26
         if let button = statusItem.button {
             button.image = NSImage(named: "zMenubarIcon")
-            button.image?.size = NSSize(width: 19, height: 19)
+            button.image?.size = NSSize(width: 20, height: 20)
             button.image?.isTemplate = true
             button.image?.accessibilityDescription = "zWhisper"
             button.action = #selector(handleClick)
