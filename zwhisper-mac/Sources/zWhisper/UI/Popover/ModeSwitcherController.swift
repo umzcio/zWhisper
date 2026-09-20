@@ -64,11 +64,18 @@ final class ModeSwitcherController {
         vibrancy.addSubview(hostingView)
         panel.setContentSize(size)
 
-        // §3.4: anchored below-left of the pill (prototype: left-0, top-7).
-        panel.setFrameOrigin(NSPoint(
+        // §3.4: anchored below-left of the pill — flipping above it when the
+        // pill sits too close to the bottom edge (docked indicator).
+        var origin = NSPoint(
             x: anchorRect.minX,
             y: anchorRect.minY - size.height - 7
-        ))
+        )
+        if let screen = NSScreen.main ?? NSScreen.screens.first,
+           origin.y < screen.visibleFrame.minY + 4
+        {
+            origin.y = anchorRect.maxY + 7
+        }
+        panel.setFrameOrigin(origin)
         panel.orderFrontRegardless()
         installDismissMonitors()
     }
