@@ -193,7 +193,9 @@ struct OnboardingView: View {
                 }
                 .frame(width: 64, height: 64)
             } else {
-                ZWAppIcon(size: 64)
+                AnimatedLogoView()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
 
             Text(title)

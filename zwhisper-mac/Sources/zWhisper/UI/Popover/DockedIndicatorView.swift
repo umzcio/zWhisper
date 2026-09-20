@@ -54,8 +54,9 @@ struct DockedIndicatorView: View {
     private var restRow: some View {
         HStack(spacing: 10) {
             Button { appState.toggleSwitcher() } label: {
-                ZWAppIcon(size: 20)
-                    .frame(width: 24, height: 24)
+                AnimatedLogoView()
+                    .frame(width: 22, height: 22)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                     .contentShape(Rectangle())
             }
             .buttonStyle(ZWButtonStyle(hoverScale: 1.08, pressScale: 0.92))
