@@ -277,7 +277,7 @@ struct PopoverContentView: View {
                     }
                     .buttonStyle(ZWButtonStyle())
                 } else {
-                    Button(action: appState.startDictation) {
+                    Button(action: { appState.startDictation() }) {
                         Label("Start dictation", systemImage: "mic")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.white)

@@ -161,7 +161,16 @@ final class AppState {
     private var partialForwardingTask: Task<Void, Never>?
     private var autoStopTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
+    /// True between a start trigger and `phase = .recording`; closes the
+    /// double-start window while permission/engine awaits are in flight.
+    private var startInFlight = false
     private var metering = false
+
+    /// Where a dictation start came from; PTT starts re-check the hold before
+    /// recording begins (§10.1 stuck-hold mitigation).
+    enum StartTrigger {
+        case toggle, pushToTalk
+    }
 
     init(
         audio: AudioCaptureEngineProtocol = AudioCaptureEngine(),
@@ -591,7 +600,7 @@ final class AppState {
     func startPushToTalk() {
         guard case .idle = phase, !holdToTalkActive else { return }
         holdToTalkActive = true
-        startDictation()
+        startDictation(trigger: .pushToTalk)
     }
 
     func stopPushToTalk() {
@@ -602,9 +611,11 @@ final class AppState {
         }
     }
 
-    func startDictation() {
-        guard case .idle = phase else { return }
+    func startDictation(trigger: StartTrigger = .toggle) {
+        guard case .idle = phase, !startInFlight else { return }
+        startInFlight = true
         Task { @MainActor in
+            defer { startInFlight = false }
             guard await requestRecordPermission() else {
                 micDenied = true
                 summonPopover()
@@ -624,6 +635,12 @@ final class AppState {
             do {
                 try await audio.start()
             } catch {
+                return
+            }
+            // §4.1/§10.1: a PTT release that landed while the engine was
+            // starting must not leave a held-less recording running.
+            if trigger == .pushToTalk, !holdToTalkActive {
+                await audio.cancel()
                 return
             }
             phase = .recording(startedAt: .now)
@@ -668,12 +685,16 @@ final class AppState {
     func stopDictation() {
         guard case .recording = phase else { return }
         autoStopTask?.cancel()
+        // Leave .recording synchronously: a second stop inside the audio.stop()
+        // await below would otherwise start a duplicate transcription pipeline
+        // and orphan this task's cancellation handle.
+        phase = .transcribing
         transcriptionTask = Task { @MainActor in
             let sessionAudio = await audio.stop()
             ZWSoundEffects.play(.recordStop, style: settings.soundEffectsStyle)
             lastSessionDuration = Double(sessionAudio.frameLength) / 16_000
             lastAudioPath = await audio.sessionAudioRelativePath
-            phase = .transcribing
+            guard case .transcribing = phase else { return } // cancelled during stop
             waveform.beginSettle(now: .now, barCount: popoverSize == .main ? 48 : 28)
             do {
                 let started = ContinuousClock.now
@@ -829,6 +850,9 @@ final class AppState {
             partialText = ""
             transcriptText = ""
             processedText = ""
+            // stop() keeps the session m4a; a cancelled dictation must not
+            // leave it on disk (no history entry references it).
+            Task { await audio.cancel() }
         case .idle, .pasting, .pasted:
             break
         }

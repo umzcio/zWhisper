@@ -9,6 +9,7 @@ actor MockTranscriptionEngine: TranscriptionEngineProtocol {
     private nonisolated let partialContinuation: AsyncStream<String>.Continuation
 
     private(set) var loadCalls = 0
+    private(set) var finalCalls = 0
     private(set) var vocabulary: [String] = []
     private(set) var fedBuffers = 0
     /// Artificial delay before the final transcript returns (transcribing-phase tests).
@@ -55,6 +56,7 @@ actor MockTranscriptionEngine: TranscriptionEngineProtocol {
     }
 
     func transcribeFinal(_ audio: AVAudioPCMBuffer) async throws -> Transcript {
+        finalCalls += 1
         if finalDelay > .zero {
             try? await Task.sleep(for: finalDelay)
         }

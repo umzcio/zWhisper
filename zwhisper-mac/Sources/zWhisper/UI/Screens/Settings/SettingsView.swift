@@ -295,7 +295,7 @@ private struct GeneralPane: View {
 
             VStack(spacing: 8) {
                 ZWAppIcon(size: 32)
-                Text("zWhisper v0.1 — on-device dictation")
+                Text("zWhisper v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") — on-device dictation")
                     .font(.system(size: 11))
                     .foregroundStyle(ZWColor.text3)
             }

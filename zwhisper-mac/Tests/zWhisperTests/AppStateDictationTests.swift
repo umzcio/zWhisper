@@ -18,6 +18,20 @@ actor MockAudioCaptureEngine: AudioCaptureEngineProtocol {
     private(set) var normalization: Bool?
     private(set) var silence: (enabled: Bool, aggressiveness: Int)?
 
+    /// When armed, the next start() suspends until releaseStartGate() —
+    /// lets tests interleave events inside the async start window.
+    private var startGateArmed = false
+    private var startGate: CheckedContinuation<Void, Never>?
+
+    func armStartGate() {
+        startGateArmed = true
+    }
+
+    func releaseStartGate() {
+        startGate?.resume()
+        startGate = nil
+    }
+
     init() {
         var levelContinuation: AsyncStream<Float>.Continuation!
         levels = AsyncStream { levelContinuation = $0 }
@@ -45,6 +59,10 @@ actor MockAudioCaptureEngine: AudioCaptureEngineProtocol {
 
     func start() async throws {
         startCalls += 1
+        if startGateArmed {
+            startGateArmed = false
+            await withCheckedContinuation { startGate = $0 }
+        }
     }
 
     func stop() -> AVAudioPCMBuffer {
@@ -203,6 +221,74 @@ struct AppStateDictationTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(await !mock.meteringActive)
         #expect(state.currentLevel == 0)
+    }
+
+    @Test("double stop inside the stop window transcribes once (race regression)")
+    func doubleStop() async throws {
+        let audio = MockAudioCaptureEngine()
+        let transcription = MockTranscriptionEngine()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zwhisper-tests-\(UUID().uuidString)", isDirectory: true)
+        let state = AppState(
+            audio: audio,
+            transcription: transcription,
+            paste: MockPasteController(),
+            persistence: PersistenceStore(directory: dir),
+            requestRecordPermission: { true }
+        )
+        await state.prepareTranscription()
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .recording = state.phase else {
+            Issue.record("expected recording, got \(state.phase)")
+            return
+        }
+        // Two stop triggers in immediate succession (PTT release + toggle).
+        state.stopDictation()
+        state.stopDictation()
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(await transcription.finalCalls == 1)
+        #expect(await audio.stopCalls == 1)
+        #expect(state.history.count == 1)
+    }
+
+    @Test("quick PTT tap (release before engine start completes) ends idle")
+    func quickPTTTap() async throws {
+        let (state, mock) = await makeState()
+        await mock.armStartGate()
+        state.startPushToTalk()
+        for _ in 0 ..< 50 {
+            if await mock.startCalls == 1 { break } // start is parked in the gate
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        state.stopPushToTalk()
+        await mock.releaseStartGate()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(state.phase == .idle)
+        #expect(!state.holdToTalkActive)
+        #expect(await mock.cancelCalls >= 1)
+        #expect(state.history.isEmpty)
+    }
+
+    @Test("double start inside the start window starts the engine once")
+    func doubleStart() async throws {
+        let (state, mock) = await makeState()
+        await mock.armStartGate()
+        state.startDictation()
+        state.startDictation()
+        // Wait until the first start is actually parked in the gate before
+        // releasing (startCalls increments ahead of the suspension).
+        for _ in 0 ..< 50 {
+            if await mock.startCalls == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await mock.releaseStartGate()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await mock.startCalls == 1)
+        guard case .recording = state.phase else {
+            Issue.record("expected recording, got \(state.phase)")
+            return
+        }
     }
 }
 
