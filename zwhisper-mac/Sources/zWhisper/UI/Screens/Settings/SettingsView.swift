@@ -486,8 +486,8 @@ private struct ShortcutsPane: View {
                 SettingsRow(label: "Push to talk (hold)", caption: nil, infoTip: nil, showsSeparator: true) {
                     KeyboardShortcuts.Recorder(for: .pushToTalk)
                 }
-                SettingsRow(label: "Cancel dictation", caption: nil, infoTip: nil, showsSeparator: true) {
-                    KeyboardShortcuts.Recorder(for: .cancelDictation)
+                SettingsRow(label: "Cancel dictation", caption: "Default: esc", infoTip: nil, showsSeparator: true) {
+                    CancelShortcutRecorder()
                 }
                 SettingsRow(label: "Change mode (cycle)", caption: nil, infoTip: nil, showsSeparator: true) {
                     KeyboardShortcuts.Recorder(for: .changeModeCycle)
@@ -1045,6 +1045,55 @@ private struct PermissionsStatusView: View {
                 .foregroundStyle(ZWColor.accentBlue)
                 .buttonStyle(ZWButtonStyle(pressScale: 0.96))
             }
+        }
+    }
+}
+
+/// Recorder for the Cancel-dictation binding (§6.6). Unlike the
+/// KeyboardShortcuts rows, this stores without registering globally — the
+/// binding is matched by HotkeyManager's observe-only Esc monitor.
+private struct CancelShortcutRecorder: View {
+    @State private var shortcut = CancelShortcut.current
+    @State private var armed = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        Button {
+            armed ? disarm() : arm()
+        } label: {
+            Text(armed ? "Press shortcut…" : shortcut.displayText)
+                .font(.system(size: 11, design: .monospaced))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(armed ? ZWColor.accentBlue.opacity(0.2) : ZWColor.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(armed ? ZWColor.accentBlue : ZWColor.separator, lineWidth: 1)
+                )
+                .foregroundStyle(ZWColor.text1)
+        }
+        .buttonStyle(.plain)
+        .onDisappear(perform: disarm)
+    }
+
+    private func arm() {
+        armed = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            let captured = CancelShortcut(keyCode: event.keyCode, modifiers: Int(modifiers.rawValue))
+            CancelShortcut.store(captured)
+            shortcut = captured
+            disarm()
+            return nil // consume the captured key so it doesn't fire elsewhere
+        }
+    }
+
+    private func disarm() {
+        armed = false
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
         }
     }
 }

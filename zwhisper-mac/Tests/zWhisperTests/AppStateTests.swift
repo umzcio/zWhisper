@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import zWhisper
@@ -65,28 +66,24 @@ struct AppStateTests {
         #expect(calls == [true, false])
     }
 
-    @Test("Esc hotkey is claimed only while the popover is open")
-    func escapeHotkeyGating() {
-        let state = AppState()
-        var calls: [Bool] = []
-        state.setEscapeHotkeyEnabled = { calls.append($0) }
-        state.summonPopover()
-        #expect(calls == [true])
-        state.dismissPopover()
-        #expect(calls == [true, false])
-    }
-
     @Test("docked indicator: dismiss collapses instead of hiding")
     func dockedCollapse() {
         let state = AppState()
         state.settings.popoverPlacement = .bottomRight
-        var escCalls: [Bool] = []
-        state.setEscapeHotkeyEnabled = { escCalls.append($0) }
         state.summonPopover()
         #expect(state.isPopoverOpen)
         state.dismissPopover()
         #expect(!state.isPopoverOpen)
-        #expect(escCalls == [true, false])
         #expect(state.isDocked)
+    }
+
+    @Test("cancel shortcut stores and round-trips; default is esc")
+    func cancelShortcutStorage() {
+        #expect(CancelShortcut.current == .escape)
+        let custom = CancelShortcut(keyCode: 40, modifiers: Int(NSEvent.ModifierFlags.shift.union(.option).rawValue))
+        CancelShortcut.store(custom)
+        #expect(CancelShortcut.current == custom)
+        UserDefaults.standard.removeObject(forKey: "zw.cancelShortcut")
+        #expect(CancelShortcut.current == .escape)
     }
 }

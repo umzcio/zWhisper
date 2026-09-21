@@ -88,9 +88,6 @@ final class AppState {
     /// Claims/releases the ⌘-digit hotkeys with popover visibility, so
     /// iTerm/Chrome keep their tab shortcuts while the popover is closed.
     var setModeDigitsEnabled: ((Bool) -> Void)?
-    /// Claims/releases the bare Esc hotkey with popover visibility — a
-    /// permanently-held Esc steals Escape from every app system-wide.
-    var setEscapeHotkeyEnabled: ((Bool) -> Void)?
 
     // MARK: Dictation (M2–M5)
 
@@ -968,7 +965,6 @@ final class AppState {
         isPopoverOpen = true
         popoverExitStyle = .standard
         setModeDigitsEnabled?(true)
-        setEscapeHotkeyEnabled?(true)
         popover?.present()
         // Defer one tick so the hidden state renders before the entrance animates.
         Task { @MainActor in
@@ -981,7 +977,6 @@ final class AppState {
         isPopoverOpen = false
         popoverExitStyle = style
         setModeDigitsEnabled?(false)
-        setEscapeHotkeyEnabled?(false)
         if isDocked {
             // Docked indicator: collapse to the rest pill, never hide.
             dockedExpanded = false

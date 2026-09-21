@@ -71,9 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.setModeDigitsEnabled = { [hotkeyManager] enabled in
             hotkeyManager.setModeDigitsEnabled(enabled)
         }
-        appState.setEscapeHotkeyEnabled = { [hotkeyManager] enabled in
-            hotkeyManager.setCancelDictationEnabled(enabled)
-        }
         hotkeyManager.setUp(
             onToggleRecording: { appState.toggleDictation() },
             onCancel: { appState.cancel() },

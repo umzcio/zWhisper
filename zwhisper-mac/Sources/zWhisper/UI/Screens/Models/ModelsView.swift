@@ -696,6 +696,8 @@ private struct DotMeter: View {
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.2)
                 .foregroundStyle(ZWColor.text3)
+                .lineLimit(1)
+                .fixedSize()
             HStack(spacing: 4) {
                 ForEach(0 ..< 5, id: \.self) { dot in
                     Circle()

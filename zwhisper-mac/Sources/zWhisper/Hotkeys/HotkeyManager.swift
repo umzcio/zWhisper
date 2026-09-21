@@ -5,8 +5,6 @@ import KeyboardShortcuts
 extension KeyboardShortcuts.Name {
     /// Spec §4.1: toggle recording.
     static let toggleRecording = Self("toggleRecording", default: .init(.space, modifiers: [.option, .shift]))
-    /// Spec §4.2: cancel (Esc works in every phase).
-    static let cancelDictation = Self("cancelDictation", default: .init(.escape))
     /// §3.5 push-to-talk. No default: hold right ⌘ out of the box (modifier
     /// keys can't be expressed as a KeyboardShortcuts default); a key recorded
     /// here overrides the PTT key.
@@ -40,9 +38,6 @@ final class HotkeyManager {
         KeyboardShortcuts.onKeyDown(for: .toggleRecording) {
             Task { @MainActor in onToggleRecording() }
         }
-        KeyboardShortcuts.onKeyDown(for: .cancelDictation) {
-            Task { @MainActor in onCancel() }
-        }
         KeyboardShortcuts.onKeyDown(for: .changeModeCycle) {
             Task { @MainActor in onCycleMode() }
         }
@@ -55,21 +50,24 @@ final class HotkeyManager {
         // is open, so iTerm/Chrome keep their tab shortcuts otherwise (§4.2
         // uses them "while recording" anyway).
         setModeDigitsEnabled(false)
-        // Esc starts unclaimed for the same reason, but more critically: a
-        // permanently-registered bare Esc steals Escape from every app
-        // system-wide. It is claimed only while the popover is open (§4.2:
-        // "Esc while popover open → cancel").
-        setCancelDictationEnabled(false)
+        setUpCancelMonitor(onCancel: onCancel)
     }
 
-    /// Claims/releases the bare Esc hotkey. While we hold it, Escape is
-    /// exclusively ours — acceptable only while the popover is visibly up
-    /// (recording/cancelling); with the popover closed, Esc belongs to the OS.
-    func setCancelDictationEnabled(_ enabled: Bool) {
-        if enabled {
-            KeyboardShortcuts.reset([.cancelDictation])
-        } else {
-            KeyboardShortcuts.setShortcut(nil, for: .cancelDictation)
+    /// §4.2 cancel (Esc by default): an observe-only NSEvent monitor, not a
+    /// KeyboardShortcuts registration. A *registered* bare Esc steals Escape
+    /// from every app system-wide, and disabling it dynamically breaks the
+    /// Recorder's display — so it lives outside KeyboardShortcuts entirely.
+    /// AppState.cancel() self-guards (only acts when the popover is open).
+    private func setUpCancelMonitor(onCancel: @escaping @MainActor () -> Void) {
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            guard CancelShortcut.matches(event) else { return }
+            Task { @MainActor in onCancel() }
+        }
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if CancelShortcut.matches(event) {
+                Task { @MainActor in onCancel() }
+            }
+            return event
         }
     }
 
@@ -177,5 +175,66 @@ final class HotkeyManager {
         guard pttHeld else { return }
         pttHeld = false
         Task { @MainActor in action() }
+    }
+}
+
+/// The Cancel-dictation binding (§4.2, default Esc), stored outside
+/// KeyboardShortcuts so it is never registered as a global hotkey. The
+/// HotkeyManager's observe-only monitor matches key events against it.
+struct CancelShortcut: Equatable, Codable, Sendable {
+    var keyCode: UInt16
+    /// NSEvent.ModifierFlags rawValue masked to ⌃⌥⇧⌘.
+    var modifiers: Int
+
+    static let escape = CancelShortcut(keyCode: 53, modifiers: 0)
+    private static let defaultsKey = "zw.cancelShortcut"
+
+    static var current: CancelShortcut {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let stored = try? JSONDecoder().decode(CancelShortcut.self, from: data)
+        else { return .escape }
+        return stored
+    }
+
+    static func store(_ shortcut: CancelShortcut) {
+        if let data = try? JSONEncoder().encode(shortcut) {
+            UserDefaults.standard.set(data, forKey: defaultsKey)
+        }
+    }
+
+    static func matches(_ event: NSEvent) -> Bool {
+        let shortcut = current
+        guard event.keyCode == shortcut.keyCode else { return false }
+        return event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue == UInt(shortcut.modifiers)
+    }
+
+    /// "⌥⇧K" / "esc"-style display for the Settings recorder.
+    var displayText: String {
+        var text = ""
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
+        if flags.contains(.control) { text += "⌃" }
+        if flags.contains(.option) { text += "⌥" }
+        if flags.contains(.shift) { text += "⇧" }
+        if flags.contains(.command) { text += "⌘" }
+        return text + Self.keyName(for: keyCode)
+    }
+
+    private static func keyName(for keyCode: UInt16) -> String {
+        switch keyCode {
+        case 53: return "esc"
+        case 49: return "Space"
+        case 36: return "↩"
+        case 48: return "⇥"
+        case 51: return "⌫"
+        case 76: return "↵"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
+        default:
+            // Letters/digits via KeyboardShortcuts' formatter where it exists.
+            let formatted = String(describing: KeyboardShortcuts.Shortcut(carbonKeyCode: Int(keyCode), carbonModifiers: 0))
+            return formatted.isEmpty ? "?" : formatted
+        }
     }
 }
