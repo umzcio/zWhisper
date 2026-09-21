@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>zWhisper</title>
+        <item>
+            <title>1.0.0</title>
+            <pubDate>Sun, 20 Sep 2026 18:19:01 -0600</pubDate>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/umzcio/zWhisper/releases/download/v1.0.0/zWhisper-1.0.0.dmg" length="10826723" type="application/octet-stream" sparkle:edSignature="t6s8C/Dq1A2rVhah6UV3xmj/djtHYWuBMYa+Hl70N84LAlJtO8FrQtHSv1175EryjGnIsEqSy0a0kidHSZbmDQ=="/>
+        </item>
+    </channel>
+</rss>
