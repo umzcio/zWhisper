@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFAudio
+import AVFoundation
 import FoundationModels
 import SwiftUI
 
@@ -25,10 +26,15 @@ struct OnboardingView: View {
     @State private var micDenied = false
     @State private var inputAvailable = true
 
-    /// Format query only — no capture, no TCC prompt. 0 Hz when no input
-    /// hardware exists (Mac Studio/mini without a mic connected).
+    /// Device enumeration is metadata-only and TCC-safe before permission.
+    /// (AVAudioEngine.inputNode format queries can segfault pre-permission —
+    /// do not use them here.) False on Mac Studio/mini with no mic connected.
     private static func detectInput() -> Bool {
-        AVAudioEngine().inputNode.outputFormat(forBus: 0).sampleRate > 0
+        !AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices.isEmpty
     }
     @State private var axTrusted = false
     @State private var axPollTask: Task<Void, Never>?

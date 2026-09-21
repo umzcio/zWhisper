@@ -1,4 +1,5 @@
 import AVFAudio
+import AVFoundation
 import Accelerate
 
 enum AudioCaptureError: Error {
@@ -143,10 +144,16 @@ actor AudioCaptureEngine: AudioCaptureEngineProtocol {
         }
     }
 
-    /// No capture needed: the input node's format is 0 Hz when no input
-    /// hardware exists (e.g. a Mac Studio with nothing connected).
+    /// No capture stack involved: enumerating AVCaptureDevices is metadata-only
+    /// and TCC-safe before permission. (Do NOT probe AVAudioEngine.inputNode
+    /// here — its format query can segfault while permission is undetermined.)
+    /// Empty when no input hardware exists (Mac Studio/mini with no mic).
     nonisolated func inputIsAvailable() -> Bool {
-        AVAudioEngine().inputNode.outputFormat(forBus: 0).sampleRate > 0
+        !AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices.isEmpty
     }
 
     /// Architecture §3.2: full-session 16kHz mono buffer for the final pass.
