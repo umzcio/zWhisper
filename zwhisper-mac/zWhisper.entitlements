@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Direct distribution per architecture §2: hardened runtime only, no sandbox. -->
+    <key>com.apple.security.audio-input</key>
+    <true/>
+</dict>
+</plist>

@@ -20,3 +20,6 @@ default.profraw
 # Web prototype (app/)
 app/node_modules/
 app/dist/
+
+# Release credentials (never commit)
+zwhisper-mac/scripts/.notary-config.local

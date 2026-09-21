@@ -8,8 +8,16 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: 5JJ6G6A84S
+    ENABLE_HARDENED_RUNTIME: YES
+  configs:
+    Debug:
+      CODE_SIGN_IDENTITY: "-"
+    Release:
+      CODE_SIGN_IDENTITY: "Developer ID Application"
+      CODE_SIGN_ENTITLEMENTS: zWhisper.entitlements
 packages:
   # Architecture §2 — SPM pins
   WhisperKit:
@@ -47,16 +55,13 @@ targets:
         LSUIElement: true
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: zWhisper needs microphone access to record and transcribe your dictation.
-        # Placeholders — set to the real appcast feed + EdDSA key before release (README checklist).
-        SUFeedURL: https://example.com/zwhisper/appcast.xml
-        SUPublicEDKey: PLACEHOLDER_EDDSA_PUBLIC_KEY
+        SUFeedURL: https://raw.githubusercontent.com/umzcio/zWhisper/main/appcast.xml
+        SUPublicEDKey: 7KQVNte/Z3ts81v6gETASf21YKulzZZTiqMpF8uv5G8=
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.zwhisper.zWhisper
         PRODUCT_NAME: zWhisper
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "-"
         # KeyboardShortcuts runtime requirement (architecture §2 / risk 10.7)
         OTHER_LDFLAGS: $(inherited) -weak_framework Combine
     dependencies:
