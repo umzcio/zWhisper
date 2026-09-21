@@ -654,17 +654,20 @@ final class AppState {
             // the app would never even appear in System Settings →
             // Microphone). Say what's actually wrong instead (§8).
             guard audio.inputIsAvailable() else {
+                Self.logToStderr("dictation start: no input device detected")
                 audioFailure = "No microphone found — connect one and try again."
                 summonPopover()
                 return
             }
             guard await requestRecordPermission() else {
+                Self.logToStderr("dictation start: mic permission denied")
                 micDenied = true
                 summonPopover()
                 return
             }
             micDenied = false
             guard modelStatus == .ready else {
+                Self.logToStderr("dictation start: model not ready (\(modelStatus))")
                 summonPopover()
                 return
             }
