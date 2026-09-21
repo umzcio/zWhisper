@@ -22,7 +22,8 @@ struct ModelDownloadManager {
     /// download). token "" forces anonymous access: the repo is public, and a
     /// stale user token in ~/.cache/huggingface/token otherwise fails with 401.
     func download(variant: String, progress: @escaping @Sendable (Progress) -> Void) async throws -> URL {
-        let folder = try await WhisperKit.download(variant: variant, from: "argmaxinc/whisperkit-coreml", token: "") { download in
+        Self.migrateLegacyModelFolderIfNeeded()
+        let folder = try await WhisperKit.download(variant: variant, downloadBase: Self.downloadBase, from: "argmaxinc/whisperkit-coreml", token: "") { download in
             progress(download)
         }
         try await ensureTokenizer(inModelFolder: folder, forVariant: variant)
@@ -58,20 +59,42 @@ struct ModelDownloadManager {
         return "openai/whisper-large-v3"
     }
 
-    /// Local model folder for a variant (download location under Documents).
+    /// Model storage root. Moved out of ~/Documents in 1.0.7: Documents is
+    /// TCC-protected, so every model-folder check prompted "access your
+    /// Documents folder". Application Support prompts for nothing.
+    static var downloadBase: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("zWhisper/huggingface", isDirectory: true)
+    }
+
+    /// One-time move of pre-1.0.7 models out of ~/Documents. Idempotent;
+    /// same-volume rename, no re-download.
+    static func migrateLegacyModelFolderIfNeeded() {
+        let fm = FileManager.default
+        let legacy = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/huggingface/models", isDirectory: true)
+        let current = downloadBase.appendingPathComponent("models", isDirectory: true)
+        guard !fm.fileExists(atPath: current.path(percentEncoded: false)),
+              fm.fileExists(atPath: legacy.path(percentEncoded: false)) else { return }
+        try? fm.createDirectory(at: downloadBase, withIntermediateDirectories: true)
+        try? fm.moveItem(at: legacy, to: current)
+    }
+
+    /// Local model folder for a variant (under downloadBase/models/…).
     static func modelFolder(forVariant variant: String) -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/huggingface/models/argmaxinc/whisperkit-coreml/openai_whisper-\(variant)", isDirectory: true)
+        downloadBase.appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-\(variant)", isDirectory: true)
     }
 
     static func isDownloaded(variant: String) -> Bool {
-        FileManager.default.fileExists(
+        migrateLegacyModelFolderIfNeeded()
+        return FileManager.default.fileExists(
             atPath: modelFolder(forVariant: variant)
                 .appendingPathComponent("TextDecoder.mlmodelc").path(percentEncoded: false)
         )
     }
 
     static func delete(variant: String) throws {
+        migrateLegacyModelFolderIfNeeded()
         try FileManager.default.removeItem(at: modelFolder(forVariant: variant))
     }
 
