@@ -1046,10 +1046,17 @@ final class AppState {
         let normalization = settings.dynamicNormalization
         let removal = settings.silenceRemoval
         let aggressiveness = settings.silenceAggressiveness
+        let inputUID = settings.inputDeviceUID
         Task {
             await audio.setNormalizationEnabled(normalization)
             await audio.setSilenceRemoval(enabled: removal, aggressiveness: aggressiveness)
+            await audio.setInputDevice(uid: inputUID)
         }
+    }
+
+    /// Settings → Sound input picker: current audio input devices.
+    nonisolated func inputDevices() -> [(id: String, name: String)] {
+        AudioCaptureEngine.availableInputs()
     }
 
     // MARK: Popover actions (M1)

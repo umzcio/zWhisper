@@ -94,6 +94,12 @@ actor MockAudioCaptureEngine: AudioCaptureEngineProtocol {
     nonisolated func inputIsAvailable() -> Bool {
         inputAvailable
     }
+
+    private(set) var inputDeviceUID: String??
+
+    func setInputDevice(uid: String?) {
+        inputDeviceUID = uid
+    }
 }
 
 @Suite("AppState dictation (M2)")
@@ -208,10 +214,12 @@ struct AppStateDictationTests {
         let (state, mock) = await makeState()
         state.settings.dynamicNormalization = false
         state.settings.silenceAggressiveness = 80
+        state.settings.inputDeviceUID = "test-device-uid"
         state.settingsDidChange()
         try await Task.sleep(for: .milliseconds(100))
         #expect(await mock.normalization == false)
         #expect(await mock.silence?.aggressiveness == 80)
+        #expect(await mock.inputDeviceUID == "test-device-uid")
     }
 
     @Test("metering runs levels-only while the Sound pane is visible")

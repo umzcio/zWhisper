@@ -318,16 +318,8 @@ private struct SoundPane: View {
     var body: some View {
         Group {
             SettingsGroup(title: "Input") {
-                // Decorative per spec §6.6 — device selection is not wired.
                 SettingsRow(label: "Input device", caption: nil, infoTip: nil, showsSeparator: true) {
-                    HStack(spacing: 4) {
-                        Text("System default")
-                            .font(.system(size: 13))
-                            .foregroundStyle(ZWColor.text3)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundStyle(ZWColor.text3)
-                    }
+                    InputDevicePicker(appState: appState)
                 }
                 SettingsRow(label: "Input level", caption: nil, infoTip: nil, showsSeparator: true) {
                     InputMeterView(level: appState.currentLevel)
@@ -443,6 +435,38 @@ private struct SoundPane: View {
 
     private func openMicrophoneSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+    }
+}
+
+/// §6.6 input device picker: "System default" (nil) + every capturable input.
+/// Refreshes on appear and every 2s while visible (USB mics hotplug).
+private struct InputDevicePicker: View {
+    @Bindable var appState: AppState
+    @State private var devices: [(id: String, name: String)] = []
+
+    var body: some View {
+        Picker("", selection: $appState.settings.inputDeviceUID) {
+            Text("System default").tag(String?.none)
+            ForEach(devices, id: \.id) { device in
+                Text(device.name).tag(String?.some(device.id))
+            }
+            // Keep the current selection visible if the device is unplugged.
+            if let uid = appState.settings.inputDeviceUID,
+               !devices.contains(where: { $0.id == uid }) {
+                Text("Unavailable device").tag(String?.some(uid))
+            }
+        }
+        .labelsHidden()
+        .frame(width: 240)
+        .onAppear { refresh() }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            refresh()
+        }
+    }
+
+    private func refresh() {
+        let found = appState.inputDevices()
+        if found.map(\.id) != devices.map(\.id) { devices = found }
     }
 }
 

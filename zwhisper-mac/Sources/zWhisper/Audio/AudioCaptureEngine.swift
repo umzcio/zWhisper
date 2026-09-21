@@ -1,5 +1,6 @@
 import AVFAudio
 import AVFoundation
+import AudioToolbox
 import Accelerate
 
 enum AudioCaptureError: Error {
@@ -34,6 +35,9 @@ protocol AudioCaptureEngineProtocol: Sendable {
     /// Levels-only capture for the Settings → Sound input meter.
     func startMetering() async throws
     func stopMetering() async
+    /// Settings → Sound input picker: nil = system default. Applies to the
+    /// next capture session; a disappeared device falls back to default.
+    func setInputDevice(uid: String?) async
     /// True when an audio input device exists — Mac Studio/mini ship without
     /// one, and TCC has nothing to grant in that case (the app would never
     /// appear in System Settings → Microphone). Checked before requesting
@@ -88,6 +92,51 @@ actor AudioCaptureEngine: AudioCaptureEngineProtocol {
     private var silenceRemovalEnabled = true
     /// Aggressiveness 0–100 → gate threshold −60dB…−15dB.
     private var silenceThresholdDB: Float = -42
+    /// Settings → Sound input picker: nil = system default input.
+    private var selectedInputUID: String?
+
+    /// Settings → Sound input picker: all capturable audio input devices
+    /// (AVCaptureDevice metadata — TCC-safe before permission).
+    nonisolated static func availableInputs() -> [(id: String, name: String)] {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices.map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+
+    func setInputDevice(uid: String?) {
+        selectedInputUID = uid
+    }
+
+    /// CoreAudio device id for an AVCaptureDevice UID (nil = unplugged →
+    /// caller keeps the system default).
+    private static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return nil }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return nil }
+        for id in ids {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var deviceUID: CFString?
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            if AudioObjectGetPropertyData(id, &uidAddress, 0, nil, &uidSize, &deviceUID) == noErr,
+               (deviceUID as String?) == uid {
+                return id
+            }
+        }
+        return nil
+    }
 
     init(audioDirectory: URL? = nil) {
         self.audioDirectory = audioDirectory ?? FileManager.default
@@ -195,6 +244,19 @@ actor AudioCaptureEngine: AudioCaptureEngineProtocol {
     private func installPipeline() throws {
         tearDownCapture(deleteSessionFile: false)
         let input = engine.inputNode
+        // §6.6 input picker: pin the capture device before reading its format.
+        if let uid = selectedInputUID, let deviceID = Self.audioDeviceID(forUID: uid),
+           let audioUnit = input.audioUnit {
+            var id = deviceID
+            AudioUnitSetProperty(
+                audioUnit,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &id,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+        }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw AudioCaptureError.inputUnavailable
