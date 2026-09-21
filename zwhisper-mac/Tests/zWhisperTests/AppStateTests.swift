@@ -86,4 +86,58 @@ struct AppStateTests {
         UserDefaults.standard.removeObject(forKey: "zw.cancelShortcut")
         #expect(CancelShortcut.current == .escape)
     }
+
+    @Test("history trim past 1000 entries deletes the trimmed sessions' audio files")
+    func historyTrimDeletesAudio() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zwhisper-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("audio", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let state = AppState(
+            audio: MockAudioCaptureEngine(),
+            transcription: MockTranscriptionEngine(),
+            paste: MockPasteController(),
+            persistence: PersistenceStore(directory: dir),
+            requestRecordPermission: { true }
+        )
+        func makeEntry(_ i: Int) -> HistoryEntry {
+            let path = "audio/old-\(i).m4a"
+            FileManager.default.createFile(
+                atPath: dir.appendingPathComponent(path).path(percentEncoded: false),
+                contents: Data()
+            )
+            return HistoryEntry(
+                id: UUID(), createdAt: .now, duration: 1, modeID: UUID(),
+                rawTranscript: "t", processedText: "t", audioPath: path,
+                segments: [], undoStack: [], targetApp: nil
+            )
+        }
+        for i in 0 ..< 1001 {
+            state.appendHistory(makeEntry(i))
+        }
+        #expect(state.history.count == 1000)
+        // Entry 0 (oldest) was trimmed; its file goes. Deletion runs in a Task — poll.
+        let trimmed = dir.appendingPathComponent("audio/old-0.m4a").path(percentEncoded: false)
+        var gone = false
+        for _ in 0 ..< 100 {
+            if !FileManager.default.fileExists(atPath: trimmed) { gone = true; break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(gone)
+        // A surviving entry's file is untouched.
+        #expect(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("audio/old-1000.m4a").path(percentEncoded: false)
+        ))
+    }
+
+    @Test("model catalog ids are unique and stable across hardware tiers")
+    func catalogIdsUnique() {
+        let localIDs = ModelCatalogEntry.locals.map(\.id)
+        #expect(Set(localIDs).count == localIDs.count)
+        #expect(localIDs == ["tiny", "small", "medium", "large-v3-v20240930_626MB"])
+        let allIDs = ModelCatalogEntry.all.map(\.id)
+        #expect(Set(allIDs).count == allIDs.count)
+    }
 }

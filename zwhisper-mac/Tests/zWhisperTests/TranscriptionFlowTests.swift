@@ -189,3 +189,71 @@ struct TranscriptionFlowTests {
         _ = state
     }
 }
+
+/// §6.5 text replacements: applied to the final transcript before processing.
+@Suite("Text replacements (§6.5)")
+@MainActor
+struct ReplacementFlowTests {
+    private func makeState() async -> (AppState, MockTranscriptionEngine, MockModeProcessor, MockPasteController) {
+        let transcription = MockTranscriptionEngine()
+        let processor = MockModeProcessor()
+        let paste = MockPasteController()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zwhisper-tests-\(UUID().uuidString)", isDirectory: true)
+        let state = AppState(
+            audio: MockAudioCaptureEngine(),
+            transcription: transcription,
+            modeProcessor: processor,
+            paste: paste,
+            persistence: PersistenceStore(directory: dir),
+            requestRecordPermission: { true }
+        )
+        await state.prepareTranscription()
+        return (state, transcription, processor, paste)
+    }
+
+    private func dictate(_ state: AppState) async {
+        state.startDictation()
+        try? await Task.sleep(for: .milliseconds(100))
+        state.stopDictation()
+        try? await Task.sleep(for: .milliseconds(300))
+    }
+
+    @Test("identity mode pastes the replaced transcript")
+    func identityAppliesReplacements() async throws {
+        let (state, transcription, _, paste) = await makeState()
+        await transcription.setFinalResult(Transcript(text: "send it to my email please", segments: []))
+        state.addReplacement(trigger: "my email", replacement: "zach@example.com")
+        await dictate(state)
+        #expect(paste.pastedText == "send it to zach@example.com please")
+        #expect(state.history.first?.processedText == "send it to zach@example.com please")
+    }
+
+    @Test("rewrite modes receive the replaced text as raw input")
+    func llmModeReceivesReplacedRaw() async throws {
+        let (state, transcription, processor, _) = await makeState()
+        await transcription.setFinalResult(Transcript(text: "send it to my email please", segments: []))
+        state.addReplacement(trigger: "my email", replacement: "zach@example.com")
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(processor.calls.first?.raw == "send it to zach@example.com please")
+    }
+
+    @Test("matching is case-insensitive")
+    func caseInsensitive() async throws {
+        let (state, transcription, _, paste) = await makeState()
+        await transcription.setFinalResult(Transcript(text: "Send it to My Email please", segments: []))
+        state.addReplacement(trigger: "my email", replacement: "zach@example.com")
+        await dictate(state)
+        #expect(paste.pastedText == "Send it to zach@example.com please")
+    }
+
+    @Test("matching is whole-word (no substring rewrites)")
+    func wholeWord() async throws {
+        let (state, transcription, _, paste) = await makeState()
+        await transcription.setFinalResult(Transcript(text: "concatenate the cat sat", segments: []))
+        state.addReplacement(trigger: "cat", replacement: "dog")
+        await dictate(state)
+        #expect(paste.pastedText == "concatenate the dog sat")
+    }
+}

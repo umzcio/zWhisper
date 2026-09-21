@@ -246,6 +246,42 @@ struct ModeFlowTests {
         #expect(state.history.count == 1)
     }
 
+    @Test("Reprocess with auto-paste off: re-runs processing without a paste receipt")
+    func reprocessAutoPasteOff() async throws {
+        let (state, _, _, processor, paste) = await makeState()
+        state.settings.autoPaste = false
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(paste.copiedText == processor.chunks.last)
+
+        state.reprocess()
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(state.activeMode.id == BuiltInModes.messageID)
+        #expect(processor.calls.count == 2)
+        #expect(paste.undoCalls == 0) // nothing was pasted — nothing to undo
+        let entry = try #require(state.history.first)
+        #expect(entry.modeID == BuiltInModes.messageID)
+        #expect(entry.undoStack.count == 1)
+        #expect(state.history.count == 1)
+    }
+
+    @Test("Reprocess after deleting the history entry targets nothing and still re-pastes")
+    func reprocessAfterDeletingEntry() async throws {
+        let (state, _, _, processor, _) = await makeState()
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        let entry = try #require(state.history.first)
+        state.deleteHistory(id: entry.id)
+        #expect(state.history.isEmpty)
+
+        state.reprocess()
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(processor.calls.count == 2)
+        #expect(processor.calls.last?.mode.id == BuiltInModes.messageID)
+        // No unrelated entry gained an undo version; no new entry appended.
+        #expect(state.history.isEmpty)
+    }
+
     @Test("push-to-talk: hold starts with the flag, release stops + pastes (§4.1)")
     func pushToTalk() async throws {
         let (state, _, _, _, paste) = await makeState()

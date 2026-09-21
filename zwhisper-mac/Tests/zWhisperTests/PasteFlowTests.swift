@@ -110,6 +110,17 @@ struct PasteFlowTests {
         #expect(paste.undoCalls == 1)
     }
 
+    @Test("AX-degraded path (didPaste=false): Undo paste is a no-op, transcript stays put")
+    func degradedUndoGuarded() async throws {
+        let (state, _, _, paste) = await makeState()
+        paste.receipt = PasteReceipt(changeCount: 1, snapshot: [:], targetApp: "", didPaste: false)
+        await dictate(state)
+        #expect(state.pasteSubtitle == "Press ⌘V to paste")
+        state.undoLastPaste()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.undoCalls == 0)
+    }
+
     @Test("empty transcript: no paste, no history entry — and the flow closes")
     func emptyTranscript() async throws {
         let (state, _, transcription, paste) = await makeState()

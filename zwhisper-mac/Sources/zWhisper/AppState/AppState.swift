@@ -161,6 +161,8 @@ final class AppState {
     private var partialForwardingTask: Task<Void, Never>?
     private var autoStopTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
+    /// History entry the current result toast/reprocess belongs to (§6.3).
+    private var lastHistoryEntryID: UUID?
     /// True between a start trigger and `phase = .recording`; closes the
     /// double-start window while permission/engine awaits are in flight.
     private var startInFlight = false
@@ -259,6 +261,23 @@ final class AppState {
     func removeReplacement(id: UUID) {
         vocabulary.replacements.removeAll { $0.id == id }
         vocabularyDidChange()
+    }
+
+    /// §6.5 text replacements: deterministic whole-word, case-insensitive swap
+    /// applied to the final transcript before mode processing, so both Voice
+    /// Note and LLM rewrite modes honor them (and the LLM sees the real value).
+    private func applyingReplacements(to text: String) -> String {
+        var result = text
+        for entry in vocabulary.replacements {
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: entry.trigger) + "\\b"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: NSRegularExpression.escapedTemplate(for: entry.replacement)
+            )
+        }
+        return result
     }
 
     /// §6.5/§7: useCount/lastUsedAt increment when a word appears in a final transcript.
@@ -421,6 +440,12 @@ final class AppState {
     func appendHistory(_ entry: HistoryEntry) {
         history.insert(entry, at: 0)
         if history.count > 1000 {
+            // Trimmed rows' session audio must go too — otherwise recordings
+            // accumulate in Application Support forever with no UI surface.
+            let trimmed = history.suffix(from: 1000)
+            for path in trimmed.compactMap(\.audioPath) {
+                Task { await persistence.deleteFile(path) }
+            }
             history.removeLast(history.count - 1000)
         }
         Task { await persistence.saveDebounced(history, to: "history.json") }
@@ -570,7 +595,7 @@ final class AppState {
     /// the next mode in cycle order, reprocess the same utterance, re-paste.
     /// Valid from `pasted` (toast is up) and `idle` (toast outlives the popover).
     func reprocess() {
-        guard let transcript = lastTranscript, let receipt = lastPasteReceipt else { return }
+        guard let transcript = lastTranscript else { return }
         switch phase {
         case .idle, .pasted: break
         default: return
@@ -579,7 +604,11 @@ final class AppState {
         toast?.dismiss()
         summonPopover()
         transcriptionTask = Task { @MainActor in
-            await paste.undo(receipt)
+            // Only a real ⌘V paste has something to undo (AX-degraded and
+            // auto-paste-off paths leave the transcript on the clipboard).
+            if let receipt = lastPasteReceipt, receipt.didPaste {
+                await paste.undo(receipt)
+            }
             await processAndPaste(transcript, reprocess: true)
         }
     }
@@ -702,10 +731,12 @@ final class AppState {
                 let elapsed = ContinuousClock.now - started
                 Self.logToStderr("final transcription pass: \(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)ms, \(transcript.text.count) chars")
                 guard case .transcribing = phase else { return } // cancelled meanwhile
-                lastTranscript = transcript
-                transcriptText = transcript.text
+                // §6.5: deterministic replacements land before processing.
+                let replaced = applyingReplacements(to: transcript.text)
+                lastTranscript = Transcript(text: replaced, segments: transcript.segments)
+                transcriptText = replaced
                 partialText = ""
-                noteVocabularyUsage(in: transcript.text)
+                noteVocabularyUsage(in: replaced)
             } catch {
                 guard case .transcribing = phase else { return }
                 transcriptionFailed = true
@@ -787,15 +818,19 @@ final class AppState {
         }
         phase = .pasted(appName: receipt?.targetApp ?? "")
 
-        if reprocess, let last = history.first {
-            // §6.3 per-entry reprocess history (undo stack).
-            var updated = last
-            updated.undoStack.append(ProcessedVersion(modeID: last.modeID, text: last.processedText, createdAt: .now))
-            updated.modeID = mode.id
-            updated.processedText = processed
-            replaceHistory(updated)
+        if reprocess {
+            // §6.3 per-entry reprocess history (undo stack). Target the entry
+            // this toast belongs to — the user may have deleted it from the
+            // History window while the toast was up.
+            if let id = lastHistoryEntryID, let last = history.first(where: { $0.id == id }) {
+                var updated = last
+                updated.undoStack.append(ProcessedVersion(modeID: last.modeID, text: last.processedText, createdAt: .now))
+                updated.modeID = mode.id
+                updated.processedText = processed
+                replaceHistory(updated)
+            }
         } else {
-            appendHistory(HistoryEntry(
+            let entry = HistoryEntry(
                 id: UUID(),
                 createdAt: Date.now,
                 duration: lastSessionDuration,
@@ -806,11 +841,19 @@ final class AppState {
                 segments: lastTranscript?.segments ?? [],
                 undoStack: [],
                 targetApp: receipt?.targetApp
-            ))
+            )
+            lastHistoryEntryID = entry.id
+            appendHistory(entry)
         }
 
         let words = processed.split(separator: " ").count
-        toast?.show(ResultToast(words: words, duration: lastSessionDuration, subtitle: pasteSubtitle)) { [weak self] in
+        toast?.show(ResultToast(
+            words: words,
+            duration: lastSessionDuration,
+            subtitle: pasteSubtitle,
+            canUndo: receipt?.didPaste == true,
+            canReprocess: lastTranscript != nil
+        )) { [weak self] in
             self?.undoLastPaste()
         } onReprocess: { [weak self] in
             self?.reprocess()
@@ -828,9 +871,11 @@ final class AppState {
         }
     }
 
-    /// §4.3 "Undo paste": restores the pre-paste clipboard snapshot.
+    /// §4.3 "Undo paste": restores the pre-paste clipboard snapshot. Only
+    /// meaningful after a real paste — in the AX-degraded path the transcript
+    /// is still on the clipboard and restoring would destroy it.
     func undoLastPaste() {
-        guard let receipt = lastPasteReceipt else { return }
+        guard let receipt = lastPasteReceipt, receipt.didPaste else { return }
         Task { await paste.undo(receipt) }
     }
 

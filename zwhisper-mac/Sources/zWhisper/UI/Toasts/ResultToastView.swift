@@ -6,6 +6,11 @@ struct ResultToast: Equatable {
     let duration: TimeInterval
     /// "Pasted to {app}" when pasted, "Saved to clipboard" when degraded/copy-only.
     let subtitle: String
+    /// §4.3: Undo paste only when a real ⌘V paste happened — not the
+    /// AX-degraded clipboard-only path, not the auto-paste-off copy path.
+    var canUndo: Bool = true
+    /// §6.3: Reprocess only when there is a transcript to re-run.
+    var canReprocess: Bool = true
     /// Undo paste mutates the text to "Clipboard restored" for 1.8s (§3.7).
     var clipboardRestored = false
 }
@@ -41,15 +46,20 @@ struct ResultToastView: View {
             Spacer(minLength: 0)
 
             if !toast.clipboardRestored {
-                // §4.3 toast buttons: Reprocess / Undo paste
-                Button("Reprocess", action: onReprocess)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ZWColor.text2)
-                    .buttonStyle(ZWButtonStyle(pressScale: 0.96))
-                Button("Undo paste", action: onUndo)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ZWColor.accentBlue)
-                    .buttonStyle(ZWButtonStyle(pressScale: 0.96))
+                // §4.3 toast buttons: Reprocess / Undo paste (only when the
+                // flow actually produced something for them to act on).
+                if toast.canReprocess {
+                    Button("Reprocess", action: onReprocess)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ZWColor.text2)
+                        .buttonStyle(ZWButtonStyle(pressScale: 0.96))
+                }
+                if toast.canUndo {
+                    Button("Undo paste", action: onUndo)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ZWColor.accentBlue)
+                        .buttonStyle(ZWButtonStyle(pressScale: 0.96))
+                }
             }
         }
         .padding(12)

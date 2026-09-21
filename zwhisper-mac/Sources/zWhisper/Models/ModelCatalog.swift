@@ -17,10 +17,13 @@ struct ModelCatalogEntry: Equatable, Identifiable, Sendable {
 
     static let locals: [ModelCatalogEntry] = [
         // §8 tier mapping: tiny≈Nano, small≈Fast, medium≈Pro, large-v3≈Ultra.
+        // Ids are literal variant strings — keying a row off
+        // ModelDownloadManager.defaultModelName would duplicate "small" on
+        // baseline M1/<16GB hardware (the default there IS small).
         ModelCatalogEntry(id: "tiny", name: "Nano", engine: "Whisper v3", detail: "Fastest, good for short notes", sizeLabel: "466 MB", speedDots: 4, accuracyDots: 2, isCloud: false),
         ModelCatalogEntry(id: "small", name: "Fast", engine: "Whisper v3", detail: "Best balance — default", sizeLabel: "1.5 GB", speedDots: 3, accuracyDots: 3, isCloud: false),
         ModelCatalogEntry(id: "medium", name: "Pro", engine: "Whisper v3", detail: "High accuracy, slower", sizeLabel: "2.9 GB", speedDots: 2, accuracyDots: 4, isCloud: false),
-        ModelCatalogEntry(id: ModelDownloadManager.defaultModelName, name: "Ultra", engine: "Whisper v3 Large", detail: "Maximum accuracy, long dictations", sizeLabel: "3.1 GB", speedDots: 1, accuracyDots: 5, isCloud: false),
+        ModelCatalogEntry(id: "large-v3-v20240930_626MB", name: "Ultra", engine: "Whisper v3 Large", detail: "Maximum accuracy, long dictations", sizeLabel: "3.1 GB", speedDots: 1, accuracyDots: 5, isCloud: false),
     ]
 
     static let clouds: [ModelCatalogEntry] = [

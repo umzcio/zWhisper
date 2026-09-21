@@ -30,6 +30,7 @@ final class ToastController {
     }
 
     func undoPaste() {
+        guard toast?.canUndo == true else { return }
         undoHandler?()
         toast?.clipboardRestored = true
         refreshContent()
