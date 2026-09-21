@@ -46,12 +46,10 @@ The Xcode project is **generated** — never edit `zWhisper.xcodeproj` directly;
 | Path | What it is |
 |---|---|
 | `zwhisper-mac/` | The native macOS app (Swift 6, SwiftUI + AppKit) — the product |
-| `app/` | React/TypeScript web prototype — the visual/interaction source of truth |
-| `zwhisper-design-spec.md` | Design handoff spec: tokens, components, motion, every screen |
-| `zwhisper-swift-architecture.md` | Implementation source of truth: modules, state machine, milestones |
 | `zwhisper-icon/` | App icon source art |
+| `.github/workflows/` | CI — `xcodebuild test` on every push touching `zwhisper-mac/**` |
 
-The prototype (`app/`) is a Vite app — `npm install && npm run dev` to explore the UX it encodes.
+The web prototype that the UX was designed against, plus the design spec and architecture plan, are internal working documents and aren't published here.
 
 ## Default hotkeys
 
