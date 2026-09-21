@@ -95,6 +95,10 @@ final class AppState {
     var settings = SettingsStore()
     /// Set when the user triggers dictation without microphone permission (§8).
     private(set) var micDenied = false
+    /// Set when a dictation trigger couldn't start capture (§8): no input
+    /// hardware (Mac Studio/mini without a mic) or an engine failure. Shown as
+    /// an actionable popover hint instead of failing silently.
+    private(set) var audioFailure: String?
     /// Normalized (0…1) input level, updated from the audio tap's RMS stream.
     private(set) var currentLevel: Float = 0
     let waveform = WaveformModel()
@@ -645,6 +649,15 @@ final class AppState {
         startInFlight = true
         Task { @MainActor in
             defer { startInFlight = false }
+            audioFailure = nil
+            // No input hardware → don't ask TCC (there is nothing to grant;
+            // the app would never even appear in System Settings →
+            // Microphone). Say what's actually wrong instead (§8).
+            guard audio.inputIsAvailable() else {
+                audioFailure = "No microphone found — connect one and try again."
+                summonPopover()
+                return
+            }
             guard await requestRecordPermission() else {
                 micDenied = true
                 summonPopover()
@@ -664,6 +677,9 @@ final class AppState {
             do {
                 try await audio.start()
             } catch {
+                Self.logToStderr("audio start failed: \(error)")
+                audioFailure = "Couldn't start the microphone — try again."
+                summonPopover()
                 return
             }
             // §4.1/§10.1: a PTT release that landed while the engine was

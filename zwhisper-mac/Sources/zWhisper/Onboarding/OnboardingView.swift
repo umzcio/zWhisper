@@ -23,6 +23,13 @@ struct OnboardingView: View {
     @State private var forward = true
     @State private var micGranted = false
     @State private var micDenied = false
+    @State private var inputAvailable = true
+
+    /// Format query only — no capture, no TCC prompt. 0 Hz when no input
+    /// hardware exists (Mac Studio/mini without a mic connected).
+    private static func detectInput() -> Bool {
+        AVAudioEngine().inputNode.outputFormat(forBus: 0).sampleRate > 0
+    }
     @State private var axTrusted = false
     @State private var axPollTask: Task<Void, Never>?
     @State private var downloadState: DownloadState = .idle
@@ -68,7 +75,20 @@ struct OnboardingView: View {
         case 1:
             card(icon: "mic.fill", title: "Microphone access",
                  subtitle: "zWhisper hears you only while you dictate. Audio never leaves your Mac.") {
-                if micGranted {
+                if !inputAvailable {
+                    // Mac Studio/mini without a mic connected: there is nothing
+                    // for TCC to grant, so don't show a dead "Grant" button.
+                    VStack(spacing: 10) {
+                        Text("No microphone detected — connect a mic or headset, then check again.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ZWColor.accentOrange)
+                            .multilineTextAlignment(.center)
+                        Button("Check again") { refreshMicStatus() }
+                            .buttonStyle(ZWButtonStyle())
+                            .font(.system(size: 12))
+                            .foregroundStyle(ZWColor.accentBlue)
+                    }
+                } else if micGranted {
                     grantedRow("Microphone access granted")
                 } else {
                     VStack(spacing: 10) {
@@ -282,7 +302,8 @@ struct OnboardingView: View {
     }
 
     private func refreshMicStatus() {
-        micGranted = AVAudioApplication.shared.recordPermission == .granted
+        inputAvailable = Self.detectInput()
+        micGranted = inputAvailable && AVAudioApplication.shared.recordPermission == .granted
     }
 
     private func requestMic() {

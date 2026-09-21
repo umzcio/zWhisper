@@ -15,10 +15,10 @@ indexed below for future planning — none were lost.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Close dictation start/stop race windows | P1 | S | — | DONE |
-| 002 | Apply text replacements in the pipeline | P1 | M | land after 001 if concurrent | TODO |
-| 003 | Delete audio files on history trim | P1 | S | — | TODO |
-| 004 | Gate toast Undo/Reprocess on receipt | P1 | S | — | TODO |
-| 005 | Fix ModelCatalog duplicate id on baseline hardware | P2 | S | — | TODO |
+| 002 | Apply text replacements in the pipeline | P1 | M | — | DONE |
+| 003 | Delete audio files on history trim | P1 | S | — | DONE |
+| 004 | Gate toast Undo/Reprocess on receipt | P1 | S | — | DONE |
+| 005 | Fix ModelCatalog duplicate id on baseline hardware | P2 | S | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

@@ -33,6 +33,11 @@ protocol AudioCaptureEngineProtocol: Sendable {
     /// Levels-only capture for the Settings → Sound input meter.
     func startMetering() async throws
     func stopMetering() async
+    /// True when an audio input device exists — Mac Studio/mini ship without
+    /// one, and TCC has nothing to grant in that case (the app would never
+    /// appear in System Settings → Microphone). Checked before requesting
+    /// permission so the UI can say "connect a mic" instead of "grant access".
+    nonisolated func inputIsAvailable() -> Bool
 }
 
 /// Settings read on the real-time tap thread. Written from the engine actor;
@@ -127,7 +132,21 @@ actor AudioCaptureEngine: AudioCaptureEngineProtocol {
         audioFileURL = fileURL
         sessionAudioRelativePath = "audio/\(fileURL.lastPathComponent)"
         mode = .recording
-        try startEngine()
+        do {
+            try startEngine()
+        } catch {
+            // A failed start must be fully retryable: tear down the half-built
+            // session (tap, file, mode) instead of leaving .recording state
+            // behind — the Settings input meter otherwise stays locked out.
+            tearDownCapture(deleteSessionFile: true)
+            throw error
+        }
+    }
+
+    /// No capture needed: the input node's format is 0 Hz when no input
+    /// hardware exists (e.g. a Mac Studio with nothing connected).
+    nonisolated func inputIsAvailable() -> Bool {
+        AVAudioEngine().inputNode.outputFormat(forBus: 0).sampleRate > 0
     }
 
     /// Architecture §3.2: full-session 16kHz mono buffer for the final pass.

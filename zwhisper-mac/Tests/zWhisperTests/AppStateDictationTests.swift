@@ -88,6 +88,12 @@ actor MockAudioCaptureEngine: AudioCaptureEngineProtocol {
     func stopMetering() {
         meteringActive = false
     }
+
+    nonisolated(unsafe) var inputAvailable = true
+
+    nonisolated func inputIsAvailable() -> Bool {
+        inputAvailable
+    }
 }
 
 @Suite("AppState dictation (M2)")
@@ -221,6 +227,29 @@ struct AppStateDictationTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(await !mock.meteringActive)
         #expect(state.currentLevel == 0)
+    }
+
+    @Test("no input hardware → actionable hint, no permission request, no engine start")
+    func noInputDevice() async throws {
+        let (state, mock) = await makeState()
+        mock.inputAvailable = false
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.phase == .idle)
+        #expect(state.audioFailure == "No microphone found — connect one and try again.")
+        #expect(!state.micDenied)
+        #expect(await mock.startCalls == 0)
+        #expect(state.isPopoverOpen)
+        // Hardware appears (user connects a mic) → the next attempt proceeds.
+        mock.inputAvailable = true
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await mock.startCalls == 1)
+        guard case .recording = state.phase else {
+            Issue.record("expected recording after mic connected, got \(state.phase)")
+            return
+        }
+        #expect(state.audioFailure == nil)
     }
 
     @Test("double stop inside the stop window transcribes once (race regression)")

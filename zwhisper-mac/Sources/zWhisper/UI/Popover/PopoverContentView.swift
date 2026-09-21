@@ -201,7 +201,9 @@ struct PopoverContentView: View {
                 }
                 .foregroundStyle(ZWColor.accentGreen)
             case .idle:
-                if appState.micDenied {
+                if let failure = appState.audioFailure {
+                    hint(failure)
+                } else if appState.micDenied {
                     hint("Microphone access is required to dictate.")
                 } else if case let .downloading(fraction) = appState.modelStatus {
                     hint("Downloading speech model… \(Int(fraction * 100))%")
