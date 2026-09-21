@@ -5,9 +5,9 @@ import KeyboardShortcuts
 extension KeyboardShortcuts.Name {
     /// Spec §4.1: toggle recording.
     static let toggleRecording = Self("toggleRecording", default: .init(.space, modifiers: [.option, .shift]))
-    /// §3.5 push-to-talk. No default: hold right ⌘ out of the box (modifier
-    /// keys can't be expressed as a KeyboardShortcuts default); a key recorded
-    /// here overrides the PTT key.
+    /// §3.5 push-to-talk. Legacy read/unregister only (migration to
+    /// PTTShortcut in UserDefaults) — never register this name: a handler-less
+    /// Carbon hotkey swallows the key system-wide.
     static let pushToTalk = Self("pushToTalk")
     /// §3.5: change mode (cycle), ⌥⇧K.
     static let changeModeCycle = Self("changeModeCycle", default: .init(.k, modifiers: [.option, .shift]))
@@ -101,6 +101,18 @@ final class HotkeyManager {
         onStart: @escaping @MainActor () -> Void,
         onStop: @escaping @MainActor () -> Void
     ) {
+        // One-time migration: the M7 KeyboardShortcuts recorder registered the
+        // recorded PTT key as a handler-less Carbon hotkey, swallowing it
+        // system-wide until relaunch. Move the binding to plain UserDefaults
+        // and unregister it.
+        if PTTShortcut.current == nil, let legacy = KeyboardShortcuts.getShortcut(for: .pushToTalk) {
+            PTTShortcut.store(KeyChord(
+                keyCode: UInt16(legacy.carbonKeyCode),
+                modifiers: Int(legacy.modifiers.intersection([.command, .option, .control, .shift]).rawValue)
+            ))
+        }
+        KeyboardShortcuts.setShortcut(nil, for: .pushToTalk)
+
         NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             guard let self, event.keyCode == Self.rightCommandKeyCode else { return }
             // Right ⌘ pressed vs released: the .command flag flips with it.
@@ -112,18 +124,20 @@ final class HotkeyManager {
         }
         NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self else { return }
-            let customKey = KeyboardShortcuts.getShortcut(for: .pushToTalk)
-            if let customKey, event.keyCode == customKey.carbonKeyCode {
-                if event.type == .keyDown, !event.isARepeat {
-                    // §10.1: a character-typing PTT key must not fire while a text
-                    // field is editable (it would type). Right ⌘ types nothing and
-                    // skips this guard; without AX trust the guard can't run and
-                    // custom-key PTT stays disabled.
-                    guard !Self.focusedElementIsEditable() else { return }
-                    self.pttPress(onStart)
-                } else if event.type == .keyUp {
+            if let chord = PTTShortcut.current, event.keyCode == chord.keyCode {
+                // Release on keyUp regardless of the current modifier mask —
+                // the user may lift the modifier before the key.
+                if event.type == .keyUp {
                     self.pttRelease(onStop)
+                    return
                 }
+                guard event.type == .keyDown, !event.isARepeat, chord.matches(event) else { return }
+                // §10.1: a character-typing PTT key must not fire while a text
+                // field is editable (it would type). Right ⌘ types nothing and
+                // skips this guard; without AX trust the guard can't run and
+                // custom-key PTT stays disabled.
+                guard !Self.focusedElementIsEditable() else { return }
+                self.pttPress(onStart)
                 return
             }
             // §10.1: any other key while held = implicit release (no stuck hold).
@@ -178,34 +192,34 @@ final class HotkeyManager {
     }
 }
 
-/// The Cancel-dictation binding (§4.2, default Esc), stored outside
-/// KeyboardShortcuts so it is never registered as a global hotkey. The
-/// HotkeyManager's observe-only monitor matches key events against it.
-struct CancelShortcut: Equatable, Codable, Sendable {
+/// A key chord stored in UserDefaults — deliberately NOT registered with
+/// KeyboardShortcuts, so recording a binding never creates a handler-less
+/// global Carbon hotkey that swallows the key system-wide. Used for cancel
+/// (§4.2) and custom push-to-talk (§3.5); observe-only NSEvent monitors match
+/// key events against the stored chord.
+struct KeyChord: Equatable, Codable, Sendable {
     var keyCode: UInt16
     /// NSEvent.ModifierFlags rawValue masked to ⌃⌥⇧⌘.
     var modifiers: Int
 
-    static let escape = CancelShortcut(keyCode: 53, modifiers: 0)
-    private static let defaultsKey = "zw.cancelShortcut"
-
-    static var current: CancelShortcut {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let stored = try? JSONDecoder().decode(CancelShortcut.self, from: data)
-        else { return .escape }
-        return stored
+    func matches(_ event: NSEvent) -> Bool {
+        guard event.keyCode == keyCode else { return false }
+        return event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue == UInt(modifiers)
     }
 
-    static func store(_ shortcut: CancelShortcut) {
-        if let data = try? JSONEncoder().encode(shortcut) {
+    static func load(defaultsKey: String) -> KeyChord? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode(KeyChord.self, from: data)
+    }
+
+    static func save(_ chord: KeyChord, defaultsKey: String) {
+        if let data = try? JSONEncoder().encode(chord) {
             UserDefaults.standard.set(data, forKey: defaultsKey)
         }
     }
 
-    static func matches(_ event: NSEvent) -> Bool {
-        let shortcut = current
-        guard event.keyCode == shortcut.keyCode else { return false }
-        return event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue == UInt(shortcut.modifiers)
+    static func clear(defaultsKey: String) {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
 
     /// "⌥⇧K" / "esc"-style display for the Settings recorder.
@@ -237,4 +251,22 @@ struct CancelShortcut: Equatable, Codable, Sendable {
             return formatted.isEmpty ? "?" : formatted
         }
     }
+}
+
+/// The Cancel-dictation binding (§4.2, default Esc) — observe-only monitor,
+/// never a registered hotkey (a registered bare Esc steals Escape everywhere).
+enum CancelShortcut {
+    static let defaultsKey = "zw.cancelShortcut"
+    static let escape = KeyChord(keyCode: 53, modifiers: 0)
+    static var current: KeyChord { KeyChord.load(defaultsKey: defaultsKey) ?? CancelShortcut.escape }
+    static func store(_ chord: KeyChord) { KeyChord.save(chord, defaultsKey: defaultsKey) }
+    static func matches(_ event: NSEvent) -> Bool { current.matches(event) }
+}
+
+/// Custom push-to-talk key (§3.5). Nil = the default hold on right ⌘.
+enum PTTShortcut {
+    static let defaultsKey = "zw.pttShortcut"
+    static var current: KeyChord? { KeyChord.load(defaultsKey: defaultsKey) }
+    static func store(_ chord: KeyChord) { KeyChord.save(chord, defaultsKey: defaultsKey) }
+    static func clear() { KeyChord.clear(defaultsKey: defaultsKey) }
 }

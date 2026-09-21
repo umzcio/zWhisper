@@ -1,4 +1,5 @@
 import AVFAudio
+import AVFoundation
 import AppKit
 import LaunchAtLogin
 import SwiftUI
@@ -194,10 +195,18 @@ final class AppState {
         self.requestRecordPermission = requestRecordPermission
     }
 
+    /// The AVCaptureDevice path is what zMeet (same team ID) ships — proven to
+    /// register with TCC on both dev machines, unlike
+    /// AVAudioApplication.requestRecordPermission, whose async variant never
+    /// produced a prompt/entry on the Mac Studio.
     static func requestSystemRecordPermission() async -> Bool {
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted: return true
-        case .undetermined: return await AVAudioApplication.requestRecordPermission()
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined:
+            logToStderr("mic permission undetermined — requesting (TCC prompt)")
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            logToStderr("mic permission request → \(granted)")
+            return granted
         default: return false
         }
     }
@@ -647,6 +656,7 @@ final class AppState {
     func startDictation(trigger: StartTrigger = .toggle) {
         guard case .idle = phase, !startInFlight else { return }
         startInFlight = true
+        Self.logToStderr("dictation start (trigger: \(trigger))")
         Task { @MainActor in
             defer { startInFlight = false }
             audioFailure = nil
@@ -1097,7 +1107,23 @@ final class AppState {
     // MARK: Internals
 
     static func logToStderr(_ message: String) {
-        FileHandle.standardError.write(Data("[zWhisper] \(message)\n".utf8))
+        let line = "[zWhisper] \(message)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        // Mirror to a support log (metadata only — no transcript content) so
+        // LSUIElement launches (stderr discarded) stay diagnosable.
+        let url = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("zWhisper/zwhisper.log")
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: nil)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data(line.utf8))
+        }
     }
 
     private func startLevelForwarding() {

@@ -1,4 +1,5 @@
 import AVFAudio
+import AVFoundation
 import ApplicationServices
 import KeyboardShortcuts
 import SwiftUI
@@ -283,7 +284,7 @@ private struct GeneralPane: View {
             SettingsGroup(title: "Permissions") {
                 SettingsRow(label: "Microphone", caption: "Required to record", infoTip: nil, showsSeparator: true) {
                     PermissionsStatusView(settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                        AVAudioApplication.shared.recordPermission == .granted
+                        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
                     }
                 }
                 SettingsRow(label: "Accessibility", caption: "Auto-paste and push-to-talk", infoTip: nil) {
@@ -483,11 +484,20 @@ private struct ShortcutsPane: View {
                 SettingsRow(label: "Toggle recording", caption: nil, infoTip: nil, showsSeparator: true) {
                     KeyboardShortcuts.Recorder(for: .toggleRecording)
                 }
-                SettingsRow(label: "Push to talk (hold)", caption: nil, infoTip: nil, showsSeparator: true) {
-                    KeyboardShortcuts.Recorder(for: .pushToTalk)
+                SettingsRow(label: "Push to talk (hold)", caption: "Default: hold right ⌘", infoTip: nil, showsSeparator: true) {
+                    ChordRecorder(
+                        fallbackText: "Right ⌘",
+                        load: { PTTShortcut.current },
+                        save: { PTTShortcut.store($0) },
+                        clear: { PTTShortcut.clear() }
+                    )
                 }
                 SettingsRow(label: "Cancel dictation", caption: "Default: esc", infoTip: nil, showsSeparator: true) {
-                    CancelShortcutRecorder()
+                    ChordRecorder(
+                        fallbackText: "esc",
+                        load: { CancelShortcut.current },
+                        save: { CancelShortcut.store($0) }
+                    )
                 }
                 SettingsRow(label: "Change mode (cycle)", caption: nil, infoTip: nil, showsSeparator: true) {
                     KeyboardShortcuts.Recorder(for: .changeModeCycle)
@@ -1052,39 +1062,80 @@ private struct PermissionsStatusView: View {
 /// Recorder for the Cancel-dictation binding (§6.6). Unlike the
 /// KeyboardShortcuts rows, this stores without registering globally — the
 /// binding is matched by HotkeyManager's observe-only Esc monitor.
-private struct CancelShortcutRecorder: View {
-    @State private var shortcut = CancelShortcut.current
+/// Recorder pill that stores a KeyChord in UserDefaults WITHOUT registering a
+/// global hotkey (a handler-less Carbon hotkey would swallow the key in every
+/// app until relaunch — the M7 PTT bug). Esc while armed cancels the capture.
+private struct ChordRecorder: View {
+    let fallbackText: String
+    let load: () -> KeyChord?
+    let save: (KeyChord) -> Void
+    let clear: (() -> Void)?
+
+    @State private var chord: KeyChord?
     @State private var armed = false
     @State private var monitor: Any?
 
+    init(
+        fallbackText: String,
+        load: @escaping () -> KeyChord?,
+        save: @escaping (KeyChord) -> Void,
+        clear: (() -> Void)? = nil
+    ) {
+        self.fallbackText = fallbackText
+        self.load = load
+        self.save = save
+        self.clear = clear
+        _chord = State(initialValue: load())
+    }
+
     var body: some View {
-        Button {
-            armed ? disarm() : arm()
-        } label: {
-            Text(armed ? "Press shortcut…" : shortcut.displayText)
-                .font(.system(size: 11, design: .monospaced))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(armed ? ZWColor.accentBlue.opacity(0.2) : ZWColor.surface2)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(armed ? ZWColor.accentBlue : ZWColor.separator, lineWidth: 1)
-                )
-                .foregroundStyle(ZWColor.text1)
+        HStack(spacing: 6) {
+            Button {
+                armed ? disarm() : arm()
+            } label: {
+                Text(armed ? "Press shortcut…" : (chord?.displayText ?? fallbackText))
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(armed ? ZWColor.accentBlue.opacity(0.2) : ZWColor.surface2)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(armed ? ZWColor.accentBlue : ZWColor.separator, lineWidth: 1)
+                    )
+                    .foregroundStyle(ZWColor.text1)
+            }
+            .buttonStyle(.plain)
+            if let clear, chord != nil, !armed {
+                Button {
+                    clear()
+                    chord = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(ZWColor.text3)
+                }
+                .buttonStyle(.plain)
+                .help("Reset to default")
+            }
         }
-        .buttonStyle(.plain)
         .onDisappear(perform: disarm)
     }
 
     private func arm() {
         armed = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Esc cancels the capture instead of recording it.
+            guard event.keyCode != 53 else {
+                Task { @MainActor in disarm() }
+                return nil
+            }
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            let captured = CancelShortcut(keyCode: event.keyCode, modifiers: Int(modifiers.rawValue))
-            CancelShortcut.store(captured)
-            shortcut = captured
-            disarm()
+            let captured = KeyChord(keyCode: event.keyCode, modifiers: Int(modifiers.rawValue))
+            save(captured)
+            Task { @MainActor in
+                chord = captured
+                disarm()
+            }
             return nil // consume the captured key so it doesn't fire elsewhere
         }
     }

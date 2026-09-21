@@ -309,12 +309,13 @@ struct OnboardingView: View {
 
     private func refreshMicStatus() {
         inputAvailable = Self.detectInput()
-        micGranted = inputAvailable && AVAudioApplication.shared.recordPermission == .granted
+        micGranted = inputAvailable && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private func requestMic() {
         Task { @MainActor in
-            let granted = await AVAudioApplication.requestRecordPermission()
+            // AVCaptureDevice path (zMeet-proven); see AppState.requestSystemRecordPermission.
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
             micGranted = granted
             micDenied = !granted
         }

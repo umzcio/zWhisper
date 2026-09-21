@@ -79,12 +79,22 @@ struct AppStateTests {
 
     @Test("cancel shortcut stores and round-trips; default is esc")
     func cancelShortcutStorage() {
-        #expect(CancelShortcut.current == .escape)
-        let custom = CancelShortcut(keyCode: 40, modifiers: Int(NSEvent.ModifierFlags.shift.union(.option).rawValue))
+        #expect(CancelShortcut.current == CancelShortcut.escape)
+        let custom = KeyChord(keyCode: 40, modifiers: Int(NSEvent.ModifierFlags.shift.union(.option).rawValue))
         CancelShortcut.store(custom)
         #expect(CancelShortcut.current == custom)
         UserDefaults.standard.removeObject(forKey: "zw.cancelShortcut")
-        #expect(CancelShortcut.current == .escape)
+        #expect(CancelShortcut.current == CancelShortcut.escape)
+    }
+
+    @Test("PTT shortcut defaults to nil (right ⌘), stores, and clears")
+    func pttShortcutStorage() {
+        #expect(PTTShortcut.current == nil)
+        let custom = KeyChord(keyCode: 49, modifiers: Int(NSEvent.ModifierFlags.control.rawValue))
+        PTTShortcut.store(custom)
+        #expect(PTTShortcut.current == custom)
+        PTTShortcut.clear()
+        #expect(PTTShortcut.current == nil)
     }
 
     @Test("history trim past 1000 entries deletes the trimmed sessions' audio files")
