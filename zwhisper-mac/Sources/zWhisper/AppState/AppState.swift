@@ -559,7 +559,7 @@ final class AppState {
 
     /// §6.2 live preview "Sample": runs the mode over the generic sample.
     func previewMode(_ mode: Mode) -> AsyncThrowingStream<String, Error> {
-        modeProcessor.process(raw: BuiltInModes.newModeSample, mode: mode, context: nil)
+        modeProcessor.process(raw: BuiltInModes.newModeSample, mode: mode, context: nil, personalContext: settings.personalContext)
     }
 
     /// §6.2 auto-activation (app-level v1): first mode with a rule matching the
@@ -794,7 +794,7 @@ final class AppState {
         let started = ContinuousClock.now
         var loggedFirstToken = false
         do {
-            for try await chunk in modeProcessor.process(raw: transcript.text, mode: mode, context: capturedContext) {
+            for try await chunk in modeProcessor.process(raw: transcript.text, mode: mode, context: capturedContext, personalContext: settings.personalContext) {
                 guard case .processing = phase else { return } // cancelled meanwhile
                 if !loggedFirstToken {
                     let elapsed = ContinuousClock.now - started

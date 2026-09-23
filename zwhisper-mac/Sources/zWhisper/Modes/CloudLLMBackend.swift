@@ -65,7 +65,7 @@ struct CloudLLMBackend: ModeBackend {
         self.session = session
     }
 
-    func stream(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error> {
+    func stream(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -77,7 +77,7 @@ struct CloudLLMBackend: ModeBackend {
                         "model": config.model,
                         "stream": true,
                         "messages": [
-                            ["role": "system", "content": ModePrompt.instructions(for: mode)],
+                            ["role": "system", "content": ModePrompt.instructions(for: mode, personalContext: personalContext)],
                             ["role": "user", "content": ModePrompt.build(raw: raw, mode: mode, context: context)],
                         ],
                     ]

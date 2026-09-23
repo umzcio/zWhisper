@@ -6,11 +6,11 @@ import FoundationModels
 /// instructions = the mode's "AI Instructions" (§6.2). `@Generable` is not
 /// used — modes produce free text.
 struct FoundationModelsBackend: ModeBackend {
-    func stream(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error> {
+    func stream(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let session = LanguageModelSession(instructions: ModePrompt.instructions(for: mode))
+                    let session = LanguageModelSession(instructions: ModePrompt.instructions(for: mode, personalContext: personalContext))
                     let prompt = ModePrompt.build(raw: raw, mode: mode, context: context)
                     for try await snapshot in session.streamResponse(to: prompt) {
                         continuation.yield(snapshot.content)
@@ -39,13 +39,18 @@ enum ModePrompt {
         """
 
     /// Per-mode system instructions: global contract + the mode's task +
-    /// the user's name (so "sign off with my name" doesn't hallucinate one).
-    static func instructions(for mode: Mode, userName: String? = NSFullUserName()) -> String {
+    /// the user's name (so "sign off with my name" doesn't hallucinate one) +
+    /// their free-text "About you" context (§6.6).
+    static func instructions(for mode: Mode, userName: String? = NSFullUserName(), personalContext: String? = nil) -> String {
         var text = transformationContract + "\n\nTask: " + mode.instructions
         let name = (userName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty {
             let firstName = name.split(separator: " ").first.map(String.init) ?? name
             text += "\nThe user's name is \(name); when a signature is needed, sign as \"\(firstName)\"."
+        }
+        let about = (personalContext ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !about.isEmpty {
+            text += "\nAbout the user (use this to resolve terms, titles, and context they mention): \(about)"
         }
         return text
     }

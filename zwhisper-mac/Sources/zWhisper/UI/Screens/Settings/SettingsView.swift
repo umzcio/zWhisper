@@ -202,6 +202,19 @@ private struct GeneralPane: View {
                 }
             }
 
+            SettingsGroup(title: "About you") {
+                SettingsRow(label: "Your context", caption: "Shared with every mode — your role, employer, and terms you use (e.g. “UM = University of Montana”).", infoTip: nil) {
+                    TextField("IT director at the University of Montana…", text: $appState.settings.personalContext, axis: .vertical)
+                        .font(.system(size: 13))
+                        .lineLimit(2 ... 4)
+                        .textFieldStyle(.plain)
+                        .padding(8)
+                        .background(ZWColor.surface2)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .frame(width: 280)
+                }
+            }
+
             SettingsGroup(title: "Appearance") {
                 SettingsRow(label: "Theme", caption: nil, infoTip: nil, showsSeparator: true) {
                     Picker("", selection: $appState.settings.theme) {

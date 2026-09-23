@@ -8,13 +8,13 @@ enum ModeProcessingError: Error, Equatable {
 /// Architecture §6: exactly two implementations. Streams yield cumulative text
 /// (the teleprompter replaces, never appends).
 protocol ModeBackend: Sendable {
-    func stream(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error>
+    func stream(raw: String, mode: Mode, context: CapturedContext?, personalContext: String?) -> AsyncThrowingStream<String, Error>
 }
 
 /// Architecture §3.4 contract. Voice Note short-circuits before either backend
 /// (§7 identity transform, zero latency).
 protocol ModeProcessorProtocol: Sendable {
-    func process(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error>
+    func process(raw: String, mode: Mode, context: CapturedContext?, personalContext: String?) -> AsyncThrowingStream<String, Error>
 }
 
 /// Backend choice (architecture §6): Foundation Models when
@@ -29,7 +29,7 @@ struct ModeProcessor: ModeProcessorProtocol {
         self.cloudBackend = cloudBackend
     }
 
-    func process(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error> {
+    func process(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         if mode.isIdentity {
             return AsyncThrowingStream { continuation in
                 continuation.yield(raw)
@@ -41,6 +41,6 @@ struct ModeProcessor: ModeProcessorProtocol {
                 continuation.finish(throwing: ModeProcessingError.intelligenceUnavailable)
             }
         }
-        return backend.stream(raw: raw, mode: mode, context: context)
+        return backend.stream(raw: raw, mode: mode, context: context, personalContext: personalContext)
     }
 }

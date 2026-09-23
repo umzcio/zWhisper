@@ -7,7 +7,7 @@ final class MockModeProcessor: ModeProcessorProtocol, @unchecked Sendable {
     var chunks = ["Dear team,", "Dear team,\n\nThe meeting has been moved to Friday.", "Dear team,\n\nThe meeting has been moved to Friday.\n\nBest, Alex"]
     var error: Error?
 
-    func process(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error> {
+    func process(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         calls.append((raw, mode))
         let chunks = self.chunks
         let error = self.error
@@ -31,7 +31,7 @@ final class TrackingBackend: ModeBackend, @unchecked Sendable {
         self.text = text
     }
 
-    func stream(raw: String, mode: Mode, context: CapturedContext?) -> AsyncThrowingStream<String, Error> {
+    func stream(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         calls += 1
         let text = self.text
         return AsyncThrowingStream { continuation in
@@ -434,5 +434,27 @@ struct ModePromptTests {
     @Test("scrub-to-empty falls back to the raw transcript")
     func scrubFallback() {
         #expect(OutputScrub.stripChatWrappers("", fallback: "raw words") == "raw words")
+    }
+
+    @Test("personal context is injected when set and omitted when empty")
+    func personalContextInjection() {
+        let with = ModePrompt.instructions(for: BuiltInModes.note, userName: "Zach", personalContext: "IT director at the University of Montana. “UM” means University of Montana, never Michigan.")
+        #expect(with.contains("About the user"))
+        #expect(with.contains("UM” means University of Montana"))
+        let without = ModePrompt.instructions(for: BuiltInModes.note, userName: "Zach", personalContext: "  ")
+        #expect(!without.contains("About the user"))
+    }
+
+    @Test("legacy settings.json (no personalContext key) still decodes")
+    func legacySettingsDecode() throws {
+        let legacy = """
+        {"language":"auto","theme":"dark","autoPaste":true,"activeDuration":30}
+        """
+        let settings = try JSONDecoder().decode(SettingsStore.self, from: Data(legacy.utf8))
+        #expect(settings.personalContext == "")
+        #expect(settings.theme == .dark)
+        #expect(settings.activeDuration == 30)
+        #expect(settings.launchAtLogin)
+        #expect(settings.inputDeviceUID == nil)
     }
 }

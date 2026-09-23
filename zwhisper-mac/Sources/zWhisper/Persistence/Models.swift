@@ -80,6 +80,37 @@ struct SettingsStore: Codable, Equatable, Sendable {
     /// Where the dictation indicator lives: floating top-center (default) or a
     /// persistent compact pill docked at the bottom-right above the Dock.
     var popoverPlacement: PopoverPlacement = .top
+    /// §6.6 "About you": free-text user context (role, employer, vocabulary
+    /// like "UM = University of Montana") injected into every mode's prompt.
+    var personalContext: String = ""
+
+    /// Tolerant decoder: synthesized Codable throws on any missing key, which
+    /// would reset every existing user's settings whenever a field is added.
+    /// Decode-if-present with the property defaults instead.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
+        showInDock = try c.decodeIfPresent(Bool.self, forKey: .showInDock) ?? false
+        startRecordingOnStatusItemClick = try c.decodeIfPresent(Bool.self, forKey: .startRecordingOnStatusItemClick) ?? true
+        alwaysCloseWindowAfterDictation = try c.decodeIfPresent(Bool.self, forKey: .alwaysCloseWindowAfterDictation) ?? true
+        theme = try c.decodeIfPresent(Theme.self, forKey: .theme) ?? .dark
+        soundEffectsStyle = try c.decodeIfPresent(SoundEffectsStyle.self, forKey: .soundEffectsStyle) ?? .subtle
+        autoPaste = try c.decodeIfPresent(Bool.self, forKey: .autoPaste) ?? true
+        restoreClipboard = try c.decodeIfPresent(Bool.self, forKey: .restoreClipboard) ?? true
+        dynamicNormalization = try c.decodeIfPresent(Bool.self, forKey: .dynamicNormalization) ?? true
+        silenceRemoval = try c.decodeIfPresent(Bool.self, forKey: .silenceRemoval) ?? true
+        silenceAggressiveness = try c.decodeIfPresent(Int.self, forKey: .silenceAggressiveness) ?? 40
+        // Optional fields: absent means "user chose nil" (∞ / system default) —
+        // never substitute a fresh-install default here.
+        activeDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .activeDuration)
+        language = try c.decodeIfPresent(String.self, forKey: .language) ?? "auto"
+        translateToEnglish = try c.decodeIfPresent(Bool.self, forKey: .translateToEnglish) ?? false
+        popoverPlacement = try c.decodeIfPresent(PopoverPlacement.self, forKey: .popoverPlacement) ?? .top
+        inputDeviceUID = try c.decodeIfPresent(String.self, forKey: .inputDeviceUID)
+        personalContext = try c.decodeIfPresent(String.self, forKey: .personalContext) ?? ""
+    }
+
+    init() {}
 
     enum PopoverPlacement: String, Codable, Sendable {
         case top, bottomRight
