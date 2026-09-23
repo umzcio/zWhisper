@@ -182,18 +182,66 @@ struct AppStateDictationTests {
         #expect(!state.isPopoverOpen)
     }
 
-    @Test("active-duration cap auto-stops the recording (§6.6)")
+    @Test("active-duration cap auto-stops the recording (§6.6 backstop)")
     func activeDurationCap() async throws {
         let (state, mock) = await makeState()
         state.settings.activeDuration = 0.3
         state.startDictation()
-        try await Task.sleep(for: .milliseconds(800))
-        // M4: the auto-stopped recording continues into the paste pipeline.
-        guard case .pasted = state.phase else {
-            Issue.record("expected pasted phase, got \(state.phase)")
+        // Watchdog ticks every 500ms; the pipeline then runs and the 700ms
+        // auto-dismiss may already have returned the phase to idle — assert
+        // the side effects, not the transient phase.
+        try await Task.sleep(for: .milliseconds(1400))
+        #expect(await mock.stopCalls == 1)
+        #expect(state.history.count == 1)
+    }
+
+    @Test("voice then trailing silence ends the dictation (pause-friendly)")
+    func trailingSilenceStop() async throws {
+        let (state, mock) = await makeState()
+        state.trailingSilence = 1.5
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        await mock.pushLevel(0.5) // voice
+        try await Task.sleep(for: .milliseconds(100))
+        // 1.5s of quiet + up to one 500ms watchdog tick + pipeline time.
+        try await Task.sleep(for: .milliseconds(2400))
+        #expect(await mock.stopCalls == 1)
+        #expect(state.history.count == 1)
+    }
+
+    @Test("no voice at all → silence-stop never fires (wall clock only)")
+    func noVoiceNoSilenceStop() async throws {
+        let (state, _) = await makeState()
+        state.trailingSilence = 0.5
+        state.settings.activeDuration = nil
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(1500))
+        guard case .recording = state.phase else {
+            Issue.record("expected recording to continue with no voice heard, got \(state.phase)")
             return
         }
-        #expect(await mock.stopCalls == 1)
+        state.cancel()
+    }
+
+    @Test("held PTT ignores trailing silence; release is the stop")
+    func pttIgnoresTrailingSilence() async throws {
+        let (state, mock) = await makeState()
+        state.trailingSilence = 0.5
+        state.settings.activeDuration = nil
+        state.startPushToTalk()
+        try await Task.sleep(for: .milliseconds(100))
+        await mock.pushLevel(0.5)
+        try await Task.sleep(for: .milliseconds(1200))
+        guard case .recording = state.phase else {
+            Issue.record("expected recording to continue while PTT held, got \(state.phase)")
+            return
+        }
+        state.stopPushToTalk()
+        try await Task.sleep(for: .milliseconds(400))
+        guard case .pasted = state.phase else {
+            Issue.record("expected pasted after PTT release, got \(state.phase)")
+            return
+        }
     }
 
     @Test("tap RMS forwards to currentLevel as a normalized 0…1 value")

@@ -77,7 +77,7 @@ struct CloudLLMBackend: ModeBackend {
                         "model": config.model,
                         "stream": true,
                         "messages": [
-                            ["role": "system", "content": mode.instructions],
+                            ["role": "system", "content": ModePrompt.instructions(for: mode)],
                             ["role": "user", "content": ModePrompt.build(raw: raw, mode: mode, context: context)],
                         ],
                     ]

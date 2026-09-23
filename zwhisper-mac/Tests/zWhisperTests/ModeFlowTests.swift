@@ -87,8 +87,15 @@ struct ModeProcessorTests {
         let superPrompt = ModePrompt.build(raw: "raw", mode: BuiltInModes.superMode, context: context)
         #expect(superPrompt.contains("selected text in Notes"))
         #expect(superPrompt.contains("clipboard"))
+        // Message has no context flags: nothing is embedded.
+        let messagePrompt = ModePrompt.build(raw: "raw", mode: BuiltInModes.message, context: context)
+        #expect(!messagePrompt.contains("selected text"))
+        #expect(!messagePrompt.contains("clip"))
+        // Email reads selected text (1.0.8: reply-vs-draft needs the thread)
+        // but not the clipboard.
         let emailPrompt = ModePrompt.build(raw: "raw", mode: BuiltInModes.email, context: context)
-        #expect(!emailPrompt.contains("selected text"))
+        #expect(emailPrompt.contains("selected text in Notes"))
+        #expect(!emailPrompt.contains("clip"))
     }
 }
 
@@ -369,5 +376,63 @@ struct ModeFlowTests {
         )
         state.addCustomMode(safari)
         #expect(state.modeMatchingRules(frontmostApp: "Safari") != nil)
+    }
+}
+
+@Suite("Mode prompts & output guardrails (§6)")
+@MainActor
+struct ModePromptTests {
+    @Test("instructions carry the transformation contract, the task, and the user's first name")
+    func instructionsShape() {
+        let text = ModePrompt.instructions(for: BuiltInModes.email, userName: "Zach Rossmiller")
+        #expect(text.contains("text-transformation engine"))
+        #expect(text.contains("never a question or request directed at you"))
+        #expect(text.contains(BuiltInModes.email.instructions))
+        #expect(text.contains("sign as \"Zach\""))
+    }
+
+    @Test("empty user name adds no signature line")
+    func instructionsNoName() {
+        let text = ModePrompt.instructions(for: BuiltInModes.note, userName: "")
+        #expect(!text.contains("sign as"))
+    }
+
+    @Test("the transcript is framed as content, not as a chat message")
+    func transcriptFraming() {
+        let prompt = ModePrompt.build(raw: "what time is lunch", mode: BuiltInModes.message, context: nil)
+        #expect(prompt.contains("Dictated transcript to transform:"))
+        #expect(prompt.contains("\"\"\"\nwhat time is lunch\n\"\"\""))
+    }
+
+    @Test("email mode reads selected text so replies can see the thread")
+    func emailContextFlag() {
+        #expect(BuiltInModes.email.readsSelectedText)
+    }
+
+    @Test("chat preamble is stripped from the artifact")
+    func scrubPreamble() {
+        let text = "Sure!\n\nDear team,\n\nThe meeting moved to Friday."
+        #expect(OutputScrub.stripChatWrappers(text, fallback: "raw") == "Dear team,\n\nThe meeting moved to Friday.")
+        let offer = "Here's your email:\nDear team,\n\nThe meeting moved to Friday."
+        #expect(OutputScrub.stripChatWrappers(offer, fallback: "raw") == "Dear team,\n\nThe meeting moved to Friday.")
+    }
+
+    @Test("chat postamble is stripped from the artifact")
+    func scrubPostamble() {
+        let text = "Dear team,\n\nThe meeting moved to Friday.\n\nLet me know if you need anything else."
+        #expect(OutputScrub.stripChatWrappers(text, fallback: "raw") == "Dear team,\n\nThe meeting moved to Friday.")
+    }
+
+    @Test("content that merely starts like chatter is preserved")
+    func scrubFalsePositives() {
+        let message = "Sure, sounds good — see you at lunch"
+        #expect(OutputScrub.stripChatWrappers(message, fallback: "raw") == message)
+        let singleLine = "Sure!"
+        #expect(OutputScrub.stripChatWrappers(singleLine, fallback: "raw") == singleLine)
+    }
+
+    @Test("scrub-to-empty falls back to the raw transcript")
+    func scrubFallback() {
+        #expect(OutputScrub.stripChatWrappers("", fallback: "raw words") == "raw words")
     }
 }

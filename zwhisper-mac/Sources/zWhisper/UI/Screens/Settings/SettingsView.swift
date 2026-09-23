@@ -386,13 +386,13 @@ private struct SoundPane: View {
             SettingsGroup(title: "Listening") {
                 SettingsRow(
                     label: "Active duration",
-                    caption: "How long the popover stays listening before auto-stopping.",
+                    caption: "Backstop only — recording normally stops when you stop talking.",
                     infoTip: nil
                 ) {
                     Picker("", selection: $appState.settings.activeDuration) {
-                        Text("15s").tag(TimeInterval?.some(15))
-                        Text("30s").tag(TimeInterval?.some(30))
-                        Text("60s").tag(TimeInterval?.some(60))
+                        Text("1m").tag(TimeInterval?.some(60))
+                        Text("5m").tag(TimeInterval?.some(300))
+                        Text("10m").tag(TimeInterval?.some(600))
                         Text("∞").tag(TimeInterval?.none)
                     }
                     .labelsHidden()

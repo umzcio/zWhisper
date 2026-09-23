@@ -67,8 +67,10 @@ struct SettingsStore: Codable, Equatable, Sendable {
     var dynamicNormalization = true
     var silenceRemoval = true
     var silenceAggressiveness = 40
-    /// Recording-length cap in seconds; nil = ∞ (§6.6 default 30s).
-    var activeDuration: TimeInterval? = 30
+    /// Backstop recording-length ceiling in seconds; nil = ∞ (§6.6). The
+    /// normal ending is trailing silence (1.0.8+), this only bounds stuck
+    /// recordings — legacy default was a 30s wall-clock length.
+    var activeDuration: TimeInterval? = 300
     /// Whisper language code; "auto" = auto-detect (§6.6 Language).
     var language = "auto"
     /// §6.6 Sound: AVCaptureDevice UID of the chosen input; nil = system default.

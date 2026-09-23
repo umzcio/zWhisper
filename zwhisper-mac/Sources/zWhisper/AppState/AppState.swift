@@ -810,7 +810,8 @@ final class AppState {
             phase = .idle
             return
         }
-        let processed = processedText.isEmpty ? transcript.text : processedText
+        let accumulated = processedText.isEmpty ? transcript.text : processedText
+        let processed = OutputScrub.stripChatWrappers(accumulated, fallback: transcript.text)
         transcriptText = processed
         await pasteAndFinish(raw: transcript.text, processed: processed, mode: mode, reprocess: reprocess)
     }
@@ -985,6 +986,14 @@ final class AppState {
         if let loaded = try? await persistence.load(SettingsStore.self, from: "settings.json") {
             settings = loaded
         }
+        // 1.0.8: "Active duration" changed from a wall-clock recording length
+        // to a backstop ceiling (trailing silence ends dictations normally).
+        // Bump legacy short caps (the 15/30/60s defaults) to 5 minutes, once.
+        if !UserDefaults.standard.bool(forKey: "zw.migratedSilenceStop"),
+           let cap = settings.activeDuration, cap < 300 {
+            settings.activeDuration = 300
+        }
+        UserDefaults.standard.set(true, forKey: "zw.migratedSilenceStop")
         applyAudioSettings()
         applyGeneralSettings()
     }
@@ -1138,7 +1147,12 @@ final class AppState {
         levelForwardingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await rms in self.audio.levels {
-                self.currentLevel = Self.normalize(rms)
+                let level = Self.normalize(rms)
+                self.currentLevel = level
+                if case .recording = self.phase, level > Self.voiceThreshold {
+                    self.lastVoicedAt = .now
+                    self.didHearVoice = true
+                }
             }
         }
     }
@@ -1172,14 +1186,39 @@ final class AppState {
         return min(1, max(0, (db + 55) / 43))
     }
 
-    /// §6.6 "Active duration" cap: auto-stop as if stop() was pressed (architecture §5).
+    /// §6.6 "Active duration" is a backstop ceiling, not the normal ending:
+    /// recording stops after `trailingSilence` seconds of quiet once speech
+    /// has been heard, so thinking pauses don't cut a dictation off. While
+    /// PTT is held, release is the stop signal and silence is ignored.
+    private var lastVoicedAt = Date.distantPast
+    private var didHearVoice = false
+    /// Seconds of continuous quiet (after speech) that end a dictation.
+    var trailingSilence: TimeInterval = 8
+    /// Normalized RMS (0…1, -55…-12dB window) above which audio counts as voice.
+    private static let voiceThreshold: Float = 0.15
+
     private func scheduleAutoStop() {
         autoStopTask?.cancel()
-        guard let cap = settings.activeDuration else { return }
+        lastVoicedAt = .now
+        didHearVoice = false
         autoStopTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(cap))
-            guard !Task.isCancelled else { return }
-            self?.stopDictation()
+            guard let self else { return }
+            let startedAt = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard case .recording = self.phase else { return }
+                // Backstop: the §6.6 ceiling bounds stuck/lost-stop recordings.
+                if let cap = self.settings.activeDuration,
+                   ContinuousClock.now - startedAt > .seconds(cap) {
+                    self.stopDictation()
+                    return
+                }
+                if !self.holdToTalkActive, self.didHearVoice,
+                   Date.now.timeIntervalSince(self.lastVoicedAt) > self.trailingSilence {
+                    self.stopDictation()
+                    return
+                }
+            }
         }
     }
 }
