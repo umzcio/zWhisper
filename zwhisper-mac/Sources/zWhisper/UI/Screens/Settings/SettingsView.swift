@@ -203,16 +203,21 @@ private struct GeneralPane: View {
             }
 
             SettingsGroup(title: "About you") {
-                SettingsRow(label: "Your context", caption: "Shared with every mode — your role, employer, and terms you use (e.g. “UM = University of Montana”).", infoTip: nil) {
-                    TextField("IT director at the University of Montana…", text: $appState.settings.personalContext, axis: .vertical)
-                        .font(.system(size: 13))
-                        .lineLimit(2 ... 4)
-                        .textFieldStyle(.plain)
-                        .padding(8)
-                        .background(ZWColor.surface2)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .frame(width: 280)
-                }
+                TextField("Explain who you are, what you do, and the terms you use", text: $appState.settings.personalContext, axis: .vertical)
+                    .font(.system(size: 13))
+                    .foregroundStyle(ZWColor.text1)
+                    .lineLimit(3 ... 5)
+                    .textFieldStyle(.plain)
+                    .padding(10)
+                    .background(ZWColor.surface3.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(ZWColor.separator, lineWidth: 1)
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             SettingsGroup(title: "Appearance") {
