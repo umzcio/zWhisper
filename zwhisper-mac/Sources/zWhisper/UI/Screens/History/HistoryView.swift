@@ -167,24 +167,12 @@ struct HistoryView: View {
     /// (multi-select, mode-color icon) + date segmented row.
     private var filterPopover: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Literal uppercase — .textCase(.uppercase)+tracking mis-measures
-            // and clips the first glyph on 1x displays.
-            Text("MODES")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.66)
-                .foregroundStyle(ZWColor.text3)
-                .padding(.bottom, 6)
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(appState.modes) { mode in
                     modeFilterRow(mode)
                 }
             }
-            .padding(.bottom, 12)
-            Text("DATE")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.66)
-                .foregroundStyle(ZWColor.text3)
-                .padding(.bottom, 6)
+            .padding(.bottom, 10)
             Picker("Date", selection: $dateFilter) {
                 ForEach(DateFilter.allCases, id: \.self) { option in
                     Text(option.title).tag(option)
