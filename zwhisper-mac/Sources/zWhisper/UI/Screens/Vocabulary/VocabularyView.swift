@@ -370,16 +370,15 @@ private struct ReplacementsTable: View {
 
     private var headerRow: some View {
         HStack(spacing: 8) {
-            Text("When I say")
+            Text("WHEN I SAY")
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Replace with")
+            Text("REPLACE WITH")
                 .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
                 .frame(width: 36)
         }
         .font(.system(size: 11, weight: .semibold))
         .tracking(0.2)
-        .textCase(.uppercase)
         .foregroundStyle(ZWColor.text3)
         .padding(.horizontal, 16)
         .padding(.vertical, 6)

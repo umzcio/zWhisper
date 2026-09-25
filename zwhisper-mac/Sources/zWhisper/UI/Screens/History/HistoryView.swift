@@ -119,11 +119,10 @@ struct HistoryView: View {
                                 }
                             }
                         } header: {
-                            Text(group.title)
+                            Text(group.title.uppercased())
                                 .font(.system(size: 11, weight: .semibold))
                                 .tracking(0.66)
                                 .foregroundStyle(ZWColor.text3)
-                                .textCase(.uppercase)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -168,11 +167,12 @@ struct HistoryView: View {
     /// (multi-select, mode-color icon) + date segmented row.
     private var filterPopover: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Modes")
+            // Literal uppercase — .textCase(.uppercase)+tracking mis-measures
+            // and clips the first glyph on 1x displays.
+            Text("MODES")
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.66)
                 .foregroundStyle(ZWColor.text3)
-                .textCase(.uppercase)
                 .padding(.bottom, 6)
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(appState.modes) { mode in
@@ -180,11 +180,10 @@ struct HistoryView: View {
                 }
             }
             .padding(.bottom, 12)
-            Text("Date")
+            Text("DATE")
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.66)
                 .foregroundStyle(ZWColor.text3)
-                .textCase(.uppercase)
                 .padding(.bottom, 6)
             Picker("Date", selection: $dateFilter) {
                 ForEach(DateFilter.allCases, id: \.self) { option in
