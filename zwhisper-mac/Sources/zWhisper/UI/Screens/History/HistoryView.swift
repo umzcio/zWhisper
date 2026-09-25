@@ -164,8 +164,8 @@ struct HistoryView: View {
         }
     }
 
-    /// §6.3 filter popover: 240px wide, radius 14 — mode chips multi-select
-    /// (11px pills, mode-color icon) + date segmented row.
+    /// §6.3 filter popover: 240px wide, radius 14 — mode checkmark list
+    /// (multi-select, mode-color icon) + date segmented row.
     private var filterPopover: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Modes")
@@ -174,9 +174,9 @@ struct HistoryView: View {
                 .foregroundStyle(ZWColor.text3)
                 .textCase(.uppercase)
                 .padding(.bottom, 6)
-            FlowLayout(spacing: 4, lineSpacing: 4) {
+            VStack(alignment: .leading, spacing: 1) {
                 ForEach(appState.modes) { mode in
-                    modeFilterChip(mode)
+                    modeFilterRow(mode)
                 }
             }
             .padding(.bottom, 12)
@@ -198,26 +198,33 @@ struct HistoryView: View {
         .frame(width: 240)
     }
 
-    private func modeFilterChip(_ mode: Mode) -> some View {
+    private func modeFilterRow(_ mode: Mode) -> some View {
         let on = modeFilter.contains(mode.id)
         return Button {
             if on { modeFilter.remove(mode.id) } else { modeFilter.insert(mode.id) }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 8) {
                 Image(systemName: mode.icon)
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
                     .foregroundStyle(Color(hex: mode.colorHex))
+                    .frame(width: 16)
                 Text(mode.name)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12))
+                    .foregroundStyle(ZWColor.text1)
+                Spacer(minLength: 8)
+                if on {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(ZWColor.accentBlue)
+                }
             }
-            .foregroundStyle(on ? ZWColor.accentBlue : ZWColor.text2)
             .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(on ? ZWColor.accentBlue.opacity(0.2) : ZWColor.surface2)
-            .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(on ? .clear : ZWColor.separator, lineWidth: 1))
+            .padding(.vertical, 5)
+            .background(on ? ZWColor.accentBlue.opacity(0.12) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .buttonStyle(ZWButtonStyle(pressScale: 0.95))
+        .buttonStyle(.plain)
     }
 
     /// Row quick action (§6.3): select the entry and start playback. Loads the
