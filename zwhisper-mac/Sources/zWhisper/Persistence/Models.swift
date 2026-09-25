@@ -64,6 +64,9 @@ struct SettingsStore: Codable, Equatable, Sendable {
     var soundEffectsStyle: SoundEffectsStyle = .subtle
     var autoPaste = true
     var restoreClipboard = true
+    /// §6.6: "Saved to History" result toast after each dictation. Off by
+    /// default (1.0.11) — the popover's pasted caption is enough feedback.
+    var showResultToast = false
     var dynamicNormalization = true
     var silenceRemoval = true
     var silenceAggressiveness = 40
@@ -97,6 +100,7 @@ struct SettingsStore: Codable, Equatable, Sendable {
         soundEffectsStyle = try c.decodeIfPresent(SoundEffectsStyle.self, forKey: .soundEffectsStyle) ?? .subtle
         autoPaste = try c.decodeIfPresent(Bool.self, forKey: .autoPaste) ?? true
         restoreClipboard = try c.decodeIfPresent(Bool.self, forKey: .restoreClipboard) ?? true
+        showResultToast = try c.decodeIfPresent(Bool.self, forKey: .showResultToast) ?? false
         dynamicNormalization = try c.decodeIfPresent(Bool.self, forKey: .dynamicNormalization) ?? true
         silenceRemoval = try c.decodeIfPresent(Bool.self, forKey: .silenceRemoval) ?? true
         silenceAggressiveness = try c.decodeIfPresent(Int.self, forKey: .silenceAggressiveness) ?? 40

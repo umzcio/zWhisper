@@ -877,16 +877,18 @@ final class AppState {
         }
 
         let words = processed.split(separator: " ").count
-        toast?.show(ResultToast(
-            words: words,
-            duration: lastSessionDuration,
-            subtitle: pasteSubtitle,
-            canUndo: receipt?.didPaste == true,
-            canReprocess: lastTranscript != nil
-        )) { [weak self] in
-            self?.undoLastPaste()
-        } onReprocess: { [weak self] in
-            self?.reprocess()
+        if settings.showResultToast {
+            toast?.show(ResultToast(
+                words: words,
+                duration: lastSessionDuration,
+                subtitle: pasteSubtitle,
+                canUndo: receipt?.didPaste == true,
+                canReprocess: lastTranscript != nil
+            )) { [weak self] in
+                self?.undoLastPaste()
+            } onReprocess: { [weak self] in
+                self?.reprocess()
+            }
         }
 
         Task { @MainActor [weak self] in

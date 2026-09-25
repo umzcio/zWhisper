@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Hosts the §4.3 result toast in a transient borderless NSPanel at the
-/// bottom-right of the screen (24px margins above `visibleFrame`, so it clears
-/// a visible Dock — the prototype's "bottom 80px" included its faux dock).
-/// Auto-dismisses after 6s; the toast lives independently of the popover (§4).
+/// top-right of the screen (24px margins from `visibleFrame`). Auto-dismisses
+/// after 6s; the toast lives independently of the popover (§4). Shown only
+/// when Settings → Paste → Result notification is on (off by default).
 @MainActor
 final class ToastController {
     private(set) var toast: ResultToast?
@@ -72,9 +72,11 @@ final class ToastController {
         if let screen = NSScreen.main ?? NSScreen.screens.first, let panel {
             let frame = panel.frame
             let visible = screen.visibleFrame
+            // Top-right: transient result summaries belong at the edge of
+            // attention, not above the Dock where the indicator lives.
             panel.setFrameOrigin(NSPoint(
                 x: visible.maxX - frame.width - 24,
-                y: visible.minY + 24
+                y: visible.maxY - frame.height - 24
             ))
         }
         panel?.orderFrontRegardless()

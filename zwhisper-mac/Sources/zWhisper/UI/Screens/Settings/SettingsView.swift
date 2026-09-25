@@ -269,9 +269,13 @@ private struct GeneralPane: View {
                 SettingsRow(
                     label: "Restore clipboard after paste",
                     caption: nil,
-                    infoTip: "We restore your previous clipboard after pasting"
+                    infoTip: "We restore your previous clipboard after pasting",
+                    showsSeparator: true
                 ) {
                     Toggle("", isOn: $appState.settings.restoreClipboard).labelsHidden()
+                }
+                SettingsRow(label: "Result notification", caption: "Summary toast after each dictation.", infoTip: nil) {
+                    Toggle("", isOn: $appState.settings.showResultToast).labelsHidden()
                 }
             }
 
