@@ -16,6 +16,9 @@ final class PopoverController {
     private let panel: NSPanel
     private weak var appState: AppState?
     private var hasBeenPositioned = false
+    /// Spring-driven frame changes (§5.1): move/resize is critically damped,
+    /// re-targetable mid-flight with carried velocity.
+    private let frameSpring = FrameSpring()
 
     /// Floating top-center (§3.1) or persistent bottom-right docked indicator.
     var placement: SettingsStore.PopoverPlacement = .top {
@@ -107,11 +110,8 @@ final class PopoverController {
                 y: old.maxY - newSize.height
             )
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.31
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(NSRect(origin: origin, size: newSize), display: true)
-        }
+        let target = NSRect(origin: origin, size: newSize)
+        frameSpring.animate(panel, to: target)
         hasBeenPositioned = true
     }
 
@@ -132,14 +132,10 @@ final class PopoverController {
         let newSize = expanded ? Self.dockedActiveSize : Self.dockedRestSize
         let old = panel.frame
         guard old.size != newSize else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.31
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(
-                NSRect(origin: dockedOrigin(for: newSize), size: newSize),
-                display: true
-            )
-        }
+        frameSpring.animate(
+            panel,
+            to: NSRect(origin: dockedOrigin(for: newSize), size: newSize)
+        )
         hasBeenPositioned = true
     }
 
@@ -158,11 +154,7 @@ final class PopoverController {
             )
         }
         if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.31
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrameOrigin(origin)
-            }
+            frameSpring.animate(panel, to: NSRect(origin: origin, size: size))
         } else {
             panel.setFrameOrigin(origin)
         }

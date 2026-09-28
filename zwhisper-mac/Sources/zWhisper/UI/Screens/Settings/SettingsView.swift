@@ -189,14 +189,6 @@ private struct GeneralPane: View {
                 SettingsRow(label: "Show in Dock", caption: nil, infoTip: nil, showsSeparator: true) {
                     Toggle("", isOn: $appState.settings.showInDock).labelsHidden()
                 }
-                SettingsRow(
-                    label: "Start recording when menu bar icon is clicked",
-                    caption: "When off, the popover opens idle instead of recording.",
-                    infoTip: nil,
-                    showsSeparator: true
-                ) {
-                    Toggle("", isOn: $appState.settings.startRecordingOnStatusItemClick).labelsHidden()
-                }
                 SettingsRow(label: "Always close window after dictation", caption: nil, infoTip: nil) {
                     Toggle("", isOn: $appState.settings.alwaysCloseWindowAfterDictation).labelsHidden()
                 }

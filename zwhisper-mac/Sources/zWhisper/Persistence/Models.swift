@@ -58,7 +58,6 @@ struct Replacement: Codable, Identifiable, Equatable, Sendable {
 struct SettingsStore: Codable, Equatable, Sendable {
     var launchAtLogin = true
     var showInDock = false
-    var startRecordingOnStatusItemClick = true
     var alwaysCloseWindowAfterDictation = true
     var theme: Theme = .dark
     var soundEffectsStyle: SoundEffectsStyle = .subtle
@@ -94,7 +93,6 @@ struct SettingsStore: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
         showInDock = try c.decodeIfPresent(Bool.self, forKey: .showInDock) ?? false
-        startRecordingOnStatusItemClick = try c.decodeIfPresent(Bool.self, forKey: .startRecordingOnStatusItemClick) ?? true
         alwaysCloseWindowAfterDictation = try c.decodeIfPresent(Bool.self, forKey: .alwaysCloseWindowAfterDictation) ?? true
         theme = try c.decodeIfPresent(Theme.self, forKey: .theme) ?? .dark
         soundEffectsStyle = try c.decodeIfPresent(SoundEffectsStyle.self, forKey: .soundEffectsStyle) ?? .subtle

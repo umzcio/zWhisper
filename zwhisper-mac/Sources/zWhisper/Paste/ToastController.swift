@@ -46,7 +46,7 @@ final class ToastController {
     func dismiss() {
         dismissTask?.cancel()
         dismissTask = nil
-        panel?.orderOut(nil)
+        presentExit()
         toast = nil
     }
 
@@ -79,7 +79,44 @@ final class ToastController {
                 y: visible.maxY - frame.height - 24
             ))
         }
-        panel?.orderFrontRegardless()
+        // Materialize from the right edge (exit retraces the same path).
+        guard let panel else { return }
+        if AppState.reduceMotion {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
+        let final = panel.frame
+        panel.setFrameOrigin(NSPoint(x: final.minX + 12, y: final.minY))
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrameOrigin(NSPoint(x: final.minX, y: final.minY))
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    private func presentExit() {
+        guard let panel, panel.isVisible else { return }
+        if AppState.reduceMotion {
+            panel.orderOut(nil)
+            return
+        }
+        let exitOrigin = NSPoint(x: panel.frame.minX + 12, y: panel.frame.minY)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrameOrigin(exitOrigin)
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            Task { @MainActor in
+                // A re-present during the exit animates alpha back to 1 — don't
+                // order the revived panel out.
+                if panel.alphaValue == 0 { panel.orderOut(nil) }
+            }
+        })
     }
 
     private func refreshContent() {

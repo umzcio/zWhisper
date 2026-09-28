@@ -55,9 +55,17 @@ struct PopoverContentView: View {
             .padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .scaleEffect(appState.popoverAppeared || AppState.reduceMotion ? 1 : (appState.popoverExitStyle == .pasted ? 0.9 : 0.85))
+        // Entrance/exit anchor to the trigger's edge (§5.1): the floating
+        // popover descends from the menu bar, the docked pill rises from the
+        // Dock — same path in both directions.
+        .scaleEffect(
+            appState.popoverAppeared || AppState.reduceMotion ? 1 : (appState.popoverExitStyle == .pasted ? 0.9 : 0.85),
+            anchor: appState.settings.popoverPlacement == .bottomRight ? .bottom : .top
+        )
         .opacity(appState.popoverAppeared ? 1 : 0)
-        .offset(y: appState.popoverAppeared || AppState.reduceMotion ? 0 : (appState.popoverExitStyle == .pasted ? -4 : -8))
+        .offset(y: appState.popoverAppeared || AppState.reduceMotion
+            ? 0
+            : (appState.settings.popoverPlacement == .bottomRight ? 1 : -1) * (appState.popoverExitStyle == .pasted ? 4 : 8))
         .onHover { hovering = $0 }
         .keyframeAnimator(initialValue: CGFloat.zero, trigger: appState.cancelShakeTrigger) { view, x in
             view.offset(x: x)
@@ -100,15 +108,19 @@ struct PopoverContentView: View {
             if isMain, case let .recording(startedAt) = appState.phase {
                 RecordingTimer(startedAt: startedAt)
             }
-            Button(action: appState.togglePopoverSize) {
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ZWColor.text3)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
+            // Main ↔ Mini is floating-placement only; the docked pill has its
+            // own two states, so the chevron would be a dead button there.
+            if !appState.isDocked {
+                Button(action: appState.togglePopoverSize) {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 13))
+                        .foregroundStyle(ZWColor.text3)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(ZWButtonStyle(hoverScale: 1.08, pressScale: 0.85))
+                .help(isMain ? "Shrink to Mini" : "Expand to Main")
             }
-            .buttonStyle(ZWButtonStyle(hoverScale: 1.08, pressScale: 0.85))
-            .help(isMain ? "Shrink to Mini" : "Expand to Main")
         }
     }
 
@@ -150,7 +162,8 @@ struct PopoverContentView: View {
         .scaleEffect(pillPulsing ? 1.15 : 1)
         .onChange(of: appState.modePulseTrigger) {
             pillPulsing = true
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+            // A commit event, not a momentum gesture: critically damped settle.
+            withAnimation(.spring(response: 0.28, dampingFraction: 1.0)) {
                 pillPulsing = false
             }
         }

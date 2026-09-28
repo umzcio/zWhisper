@@ -65,9 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modeSwitcherController = switcher
         WindowActions.appState = appState
 
-        statusItemController = StatusItemController {
-            appState.statusItemClicked()
-        }
+        statusItemController = StatusItemController(appState: appState)
         appState.setModeDigitsEnabled = { [hotkeyManager] enabled in
             hotkeyManager.setModeDigitsEnabled(enabled)
         }

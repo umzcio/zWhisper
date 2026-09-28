@@ -70,22 +70,66 @@ final class ModeSwitcherController {
             x: anchorRect.minX,
             y: anchorRect.minY - size.height - 7
         )
-        if let screen = NSScreen.main ?? NSScreen.screens.first,
-           origin.y < screen.visibleFrame.minY + 4
-        {
-            origin.y = anchorRect.maxY + 7
+        var flippedAbove = false
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            if origin.y < screen.visibleFrame.minY + 4 {
+                origin.y = anchorRect.maxY + 7
+                flippedAbove = true
+            }
+            // Keep the panel on-screen — the docked pill hugs the right edge.
+            origin.x = min(origin.x, screen.visibleFrame.maxX - size.width - 8)
+            origin.x = max(origin.x, screen.visibleFrame.minX + 8)
         }
         panel.setFrameOrigin(origin)
-        panel.orderFrontRegardless()
+
+        // Materialize from the pill's edge; the exit retraces the same path.
+        if AppState.reduceMotion {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+        } else {
+            let drift: CGFloat = flippedAbove ? -6 : 6
+            panel.setFrameOrigin(NSPoint(x: origin.x, y: origin.y + drift))
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.24
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrameOrigin(origin)
+                panel.animator().alphaValue = 1
+            }
+        }
+        flipped = flippedAbove
         installDismissMonitors()
     }
 
+    private var flipped = false
+
     func dismiss() {
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else {
+            for monitor in eventMonitors { NSEvent.removeMonitor(monitor) }
+            eventMonitors.removeAll()
+            return
+        }
         for monitor in eventMonitors {
             NSEvent.removeMonitor(monitor)
         }
         eventMonitors.removeAll()
+        if AppState.reduceMotion {
+            panel.orderOut(nil)
+            return
+        }
+        let drift: CGFloat = flipped ? -6 : 6
+        let exitOrigin = NSPoint(x: panel.frame.minX, y: panel.frame.minY + drift)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrameOrigin(exitOrigin)
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            Task { @MainActor in
+                if panel.alphaValue == 0 { panel.orderOut(nil) }
+            }
+        })
     }
 
     /// Dismiss on outside pointer-down (§3.4).

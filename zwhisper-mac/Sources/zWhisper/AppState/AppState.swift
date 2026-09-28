@@ -58,10 +58,12 @@ final class AppState {
         case main, mini
     }
 
-    /// SPRING_POP from spec §5.1 (spring 400/28).
-    static let springPop = Animation.spring(response: 0.31, dampingFraction: 0.70)
+    /// SPRING_POP from spec §5.1 (spring 400/28), critically damped per WWDC18
+    /// fluid-interfaces guidance: entrances carry no gesture momentum, so no
+    /// overshoot.
+    static let springPop = Animation.spring(response: 0.31, dampingFraction: 1.0)
     /// SPRING_DEFAULT from spec §5.1 (spring 400/30) — layout changes on resize.
-    static let springDefault = Animation.spring(response: 0.31, dampingFraction: 0.75)
+    static let springDefault = Animation.spring(response: 0.31, dampingFraction: 1.0)
 
     /// §5.5 reduced motion: springs become 150ms fades.
     static var reduceMotion: Bool {
@@ -704,6 +706,10 @@ final class AppState {
             phase = .recording(startedAt: .now)
             ZWSoundEffects.play(.recordStart, style: settings.soundEffectsStyle)
             if isDocked {
+                // Recording always shows the recording pill's content — even
+                // from the right-click "Expand window" state, which otherwise
+                // squishes the full Main chrome into the pill frame.
+                dockedExpanded = false
                 popover?.animateDockedFrame(expanded: true)
             }
             partialText = ""
@@ -941,24 +947,12 @@ final class AppState {
         }
     }
 
-    /// Status item click (spec §4.1): toggles the popover; while recording it
-    /// stops. On summon it auto-starts when Settings → General says so (§6.6).
-    func statusItemClicked() {
-        switch phase {
-        case .recording:
-            stopDictation()
-        case .transcribing, .processing, .pasting, .pasted:
-            break
-        case .idle:
-            if isPopoverOpen {
-                dismissPopover()
-            } else {
-                summonPopover()
-                if settings.startRecordingOnStatusItemClick {
-                    startDictation()
-                }
-            }
-        }
+    /// Menu-bar icon (both buttons) opens the app menu (§3.3); its "Dictate"
+    /// item summons the popover and starts recording immediately (§4.1).
+    func dictateFromMenu() {
+        guard case .idle = phase else { return }
+        summonPopover()
+        startDictation()
     }
 
     /// Settings → Sound input meter (§6.6): levels-only capture while the pane is visible.
@@ -1093,6 +1087,11 @@ final class AppState {
         isPopoverOpen = false
         popoverExitStyle = style
         setModeDigitsEnabled?(false)
+        // Dismiss clears the teleprompter — a stale transcript must not greet
+        // the next summon (results live in History).
+        transcriptText = ""
+        partialText = ""
+        processedText = ""
         if isDocked {
             // Docked indicator: collapse to the rest pill, never hide.
             dockedExpanded = false

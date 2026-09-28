@@ -1,17 +1,20 @@
 import AppKit
+import SwiftUI
 
-/// NSStatusItem menu extra (spec §3.3, architecture §2). Left click toggles
-/// the recording popover; right click shows the app menu (History / Settings /
-/// Quit), the standard menu-bar-app pattern.
+/// NSStatusItem menu extra (spec §3.3, architecture §2). Left click opens an
+/// NSPopover anchored to the icon — the exact zMeet mechanism (`.transient` +
+/// `animates`), so open/close uses Apple's built-in popover animation.
+/// Right click shows the classic NSMenu (screen links, updates, Quit).
+/// The icon never starts recording on its own.
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject, NSPopoverDelegate {
     private let statusItem: NSStatusItem
-    private let onToggle: () -> Void
+    private let popover = NSPopover()
 
-    init(onToggle: @escaping () -> Void) {
-        self.onToggle = onToggle
+    init(appState: AppState) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.length = 26
+        super.init()
         if let button = statusItem.button {
             button.image = NSImage(named: "zMenubarIcon")
             button.image?.size = NSSize(width: 20, height: 20)
@@ -21,17 +24,37 @@ final class StatusItemController {
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+
+        popover.behavior = .transient
+        popover.animates = true
+        let host = NSHostingController(
+            rootView: MenubarPanelView(appState: appState) { [weak self] in
+                self?.popover.performClose(nil)
+            }
+        )
+        popover.contentViewController = host
     }
 
     @objc private func handleClick() {
         if NSApp.currentEvent?.type == .rightMouseUp {
-            showMenu()
+            showLegacyMenu()
+            return
+        }
+        guard let button = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
         } else {
-            onToggle()
+            // zMeet parity: an accessory app must activate and the popover must
+            // become key, or .transient never engages and outside clicks don't
+            // dismiss it.
+            NSApp.activate()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
     }
 
-    private func showMenu() {
+    /// The classic NSMenu (right click): screen links, updates, Quit.
+    private func showLegacyMenu() {
         let menu = NSMenu()
         let entries: [(String, ManagementScreen)] = [
             ("Modes…", .modes),
@@ -54,7 +77,6 @@ final class StatusItemController {
         quit.target = self
         menu.addItem(quit)
 
-        // Swapping the menu in for one click keeps left-click toggle behavior.
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
