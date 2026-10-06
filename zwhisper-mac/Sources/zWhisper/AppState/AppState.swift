@@ -1010,7 +1010,12 @@ final class AppState {
         if NSApp.activationPolicy() != (settings.showInDock ? .regular : .accessory) {
             NSApp.setActivationPolicy(settings.showInDock ? .regular : .accessory)
         }
-        if LaunchAtLogin.isEnabled != settings.launchAtLogin {
+        // Only an installed copy may register as a login item — a build run
+        // from DerivedData or a DMG would otherwise add a second startup
+        // entry pointing at a path that eventually disappears.
+        let installedLocation = Bundle.main.bundleURL.path.hasPrefix("/Applications/")
+            || Bundle.main.bundleURL.path.hasPrefix(NSHomeDirectory() + "/Applications/")
+        if installedLocation, LaunchAtLogin.isEnabled != settings.launchAtLogin {
             LaunchAtLogin.isEnabled = settings.launchAtLogin
         }
         let code = settings.language == "auto" ? nil : settings.language
