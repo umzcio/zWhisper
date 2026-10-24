@@ -18,10 +18,14 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         if let button = statusItem.button {
-            button.image = NSImage(named: "zMenubarIcon")
-            button.image?.size = NSSize(width: 20, height: 20)
-            button.image?.isTemplate = true
-            button.image?.accessibilityDescription = "zWhisper"
+            // Size the image before assigning it: the bar measures the item
+            // once, at assignment, from the asset's 44pt natural size (a 60pt
+            // item instead of 36pt).
+            let image = NSImage(named: "zMenubarIcon")?.copy() as? NSImage
+            image?.size = NSSize(width: 20, height: 20)
+            image?.isTemplate = true
+            image?.accessibilityDescription = "zWhisper"
+            button.image = image
             button.action = #selector(handleClick)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
