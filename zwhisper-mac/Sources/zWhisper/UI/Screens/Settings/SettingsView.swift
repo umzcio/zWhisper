@@ -516,6 +516,9 @@ private struct InputMeterView: View {
 // MARK: - Shortcuts pane (§6.6)
 
 private struct ShortcutsPane: View {
+    /// ChordRecorder caches its chord at init; bumping this rebuilds them after a reset.
+    @State private var resetGeneration = 0
+
     var body: some View {
         Group {
             SettingsGroup(title: "Keyboard") {
@@ -529,6 +532,7 @@ private struct ShortcutsPane: View {
                         save: { PTTShortcut.store($0) },
                         clear: { PTTShortcut.clear() }
                     )
+                    .id(resetGeneration)
                 }
                 SettingsRow(label: "Cancel dictation", caption: "Default: esc", infoTip: nil, showsSeparator: true) {
                     ChordRecorder(
@@ -536,6 +540,7 @@ private struct ShortcutsPane: View {
                         load: { CancelShortcut.current },
                         save: { CancelShortcut.store($0) }
                     )
+                    .id(resetGeneration)
                 }
                 SettingsRow(label: "Change mode (cycle)", caption: nil, infoTip: nil, showsSeparator: true) {
                     KeyboardShortcuts.Recorder(for: .changeModeCycle)
@@ -554,6 +559,17 @@ private struct ShortcutsPane: View {
                 .foregroundStyle(ZWColor.text3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
+
+            Button {
+                ShortcutDefaults.restore()
+                resetGeneration += 1
+            } label: {
+                Label("Reset to defaults", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(ZWColor.accentBlue)
+            .buttonStyle(ZWButtonStyle(pressScale: 0.96))
+            .frame(maxWidth: .infinity)
         }
         .settingsPane()
     }

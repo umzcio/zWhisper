@@ -147,6 +147,18 @@ struct AppStateDictationTests {
         #expect(await mock.startCalls == 0)
     }
 
+    @Test("docked: an early-exit start never claims ⌘-digits (Ghostty/iTerm tab keys)")
+    func dockedEarlyExitKeepsDigitsFree() async throws {
+        let (state, _) = await makeState(permission: { false })
+        state.settings.popoverPlacement = .bottomRight
+        var calls: [Bool] = []
+        state.setModeDigitsEnabled = { calls.append($0) }
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.phase == .idle)
+        #expect(calls.last != true)
+    }
+
     @Test("⌥⇧Space toggle: idle → recording → idle, engine stopped")
     func toggle() async throws {
         let (state, mock) = await makeState()

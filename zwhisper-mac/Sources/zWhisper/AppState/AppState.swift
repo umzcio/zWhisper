@@ -77,7 +77,9 @@ final class AppState {
     // MARK: Popover (M1)
 
     /// True while the popover is logically open (panel may still be animating).
-    private(set) var isPopoverOpen = false
+    private(set) var isPopoverOpen = false {
+        didSet { updateModeDigitClaim() }
+    }
     /// Drives the SPRING_POP entrance/exit in the content view (spec §3.1 summon).
     private(set) var popoverAppeared = false
     private(set) var popoverExitStyle: PopoverExitStyle = .standard
@@ -89,12 +91,28 @@ final class AppState {
     weak var toast: ToastController?
     weak var switcher: ModeSwitcherController?
     /// Claims/releases the ⌘-digit hotkeys with popover visibility, so
-    /// iTerm/Chrome keep their tab shortcuts while the popover is closed.
+    /// iTerm/Chrome/Ghostty keep their tab shortcuts while the popover is closed.
     var setModeDigitsEnabled: ((Bool) -> Void)?
+    private var modeDigitsClaimed = false
+
+    /// ⌘-digits follow the *visible* popover. The docked pill is always on
+    /// screen and "open" is invisible at idle (early-exit and failure paths
+    /// leave it open), so docked mode claims them only while dictating or
+    /// expanded — otherwise ⌘1–⌘7 would stay stolen system-wide.
+    private func updateModeDigitClaim() {
+        let dictating: Bool
+        if case .idle = phase { dictating = false } else { dictating = true }
+        let wanted = isPopoverOpen && (!isDocked || dockedExpanded || dictating)
+        guard wanted != modeDigitsClaimed else { return }
+        modeDigitsClaimed = wanted
+        setModeDigitsEnabled?(wanted)
+    }
 
     // MARK: Dictation (M2–M5)
 
-    private(set) var phase: DictationPhase = .idle
+    private(set) var phase: DictationPhase = .idle {
+        didSet { updateModeDigitClaim() }
+    }
     var settings = SettingsStore()
     /// Set when the user triggers dictation without microphone permission (§8).
     private(set) var micDenied = false
@@ -642,7 +660,10 @@ final class AppState {
     /// §4.1 push-to-talk: key down (not repeat, no modifiers) starts; key up
     /// stops + pastes. Right ⌘ is the default hold key.
     func startPushToTalk() {
-        guard case .idle = phase, !holdToTalkActive else { return }
+        guard case .idle = phase, !holdToTalkActive else {
+            Self.logToStderr("ptt start ignored (phase: \(phase), holdToTalkActive: \(holdToTalkActive))")
+            return
+        }
         holdToTalkActive = true
         startDictation(trigger: .pushToTalk)
     }
@@ -656,7 +677,10 @@ final class AppState {
     }
 
     func startDictation(trigger: StartTrigger = .toggle) {
-        guard case .idle = phase, !startInFlight else { return }
+        guard case .idle = phase, !startInFlight else {
+            Self.logToStderr("dictation start ignored (phase: \(phase), startInFlight: \(startInFlight))")
+            return
+        }
         startInFlight = true
         Self.logToStderr("dictation start (trigger: \(trigger))")
         Task { @MainActor in
@@ -1024,6 +1048,7 @@ final class AppState {
 
         // Docked indicator placement (SuperWhisper-style bottom-right pill).
         popover?.placement = settings.popoverPlacement
+        updateModeDigitClaim()
         if isDocked {
             popover?.animateDockedFrame(expanded: false)
             popover?.presentPersistent()
@@ -1041,7 +1066,9 @@ final class AppState {
 
     /// The docked pill is temporarily expanded to the full §3.1 popover
     /// (right-click → "Expand window"); dismiss collapses back to the pill.
-    private(set) var dockedExpanded = false
+    private(set) var dockedExpanded = false {
+        didSet { updateModeDigitClaim() }
+    }
 
     /// Right-click "Expand window": opens the full popover at dock level.
     func expandDockedWindow() {
@@ -1079,7 +1106,6 @@ final class AppState {
         guard !isPopoverOpen else { return }
         isPopoverOpen = true
         popoverExitStyle = .standard
-        setModeDigitsEnabled?(true)
         popover?.present()
         // Defer one tick so the hidden state renders before the entrance animates.
         Task { @MainActor in
@@ -1091,7 +1117,6 @@ final class AppState {
         guard isPopoverOpen else { return }
         isPopoverOpen = false
         popoverExitStyle = style
-        setModeDigitsEnabled?(false)
         // Dismiss clears the teleprompter — a stale transcript must not greet
         // the next summon (results live in History).
         transcriptText = ""
@@ -1129,7 +1154,8 @@ final class AppState {
     // MARK: Internals
 
     static func logToStderr(_ message: String) {
-        let line = "[zWhisper] \(message)\n"
+        let stamp = Date.now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true, timeZone: .current))
+        let line = "\(stamp) [zWhisper] \(message)\n"
         FileHandle.standardError.write(Data(line.utf8))
         // Mirror to a support log (metadata only — no transcript content) so
         // LSUIElement launches (stderr discarded) stay diagnosable.
@@ -1140,7 +1166,12 @@ final class AppState {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: nil)
+        // createFile truncates, so only (re)create when missing or past 1 MB.
+        let path = url.path(percentEncoded: false)
+        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int
+        if (size ?? .max) > 1_000_000 {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
         if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()

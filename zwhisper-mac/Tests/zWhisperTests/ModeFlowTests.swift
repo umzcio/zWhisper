@@ -348,6 +348,23 @@ struct ModeFlowTests {
         #expect(state.history.isEmpty)
     }
 
+    @Test("docked: ⌘-digits are claimed while dictating and released when a failure returns to idle")
+    func dockedFailureReleasesDigits() async throws {
+        let (state, _, _, processor, _) = await makeState()
+        state.settings.popoverPlacement = .bottomRight
+        var calls: [Bool] = []
+        state.setModeDigitsEnabled = { calls.append($0) }
+        processor.error = ModeProcessingError.intelligenceUnavailable
+        state.setActiveMode(BuiltInModes.email)
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(calls.last == true)
+        state.stopDictation()
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(state.modeProcessingFailed)
+        #expect(calls.last == false)
+    }
+
     @Test("auto-activation rules match the frontmost app, app-level only (§6.2)")
     func autoActivation() async {
         let (state, _, _, _, _) = await makeState()

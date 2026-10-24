@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import KeyboardShortcuts
 import Testing
 @testable import zWhisper
 
@@ -95,6 +96,26 @@ struct AppStateTests {
         #expect(PTTShortcut.current == custom)
         PTTShortcut.clear()
         #expect(PTTShortcut.current == nil)
+    }
+
+    @Test("Reset to defaults restores toggle, cycle, PTT, and cancel")
+    func shortcutDefaultsRestore() {
+        let keys = ["KeyboardShortcuts_toggleRecording", "KeyboardShortcuts_changeModeCycle"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) { UserDefaults.standard.set(value, forKey: key) }
+        }
+        KeyboardShortcuts.setShortcut(nil, for: .toggleRecording)
+        KeyboardShortcuts.setShortcut(.init(.j, modifiers: [.control]), for: .changeModeCycle)
+        PTTShortcut.store(KeyChord(keyCode: 49, modifiers: 0))
+        CancelShortcut.store(KeyChord(keyCode: 40, modifiers: 0))
+
+        ShortcutDefaults.restore()
+
+        #expect(KeyboardShortcuts.getShortcut(for: .toggleRecording) == .init(.space, modifiers: [.option, .shift]))
+        #expect(KeyboardShortcuts.getShortcut(for: .changeModeCycle) == .init(.k, modifiers: [.option, .shift]))
+        #expect(PTTShortcut.current == nil)
+        #expect(CancelShortcut.current == CancelShortcut.escape)
     }
 
     @Test("history trim past 1000 entries deletes the trimmed sessions' audio files")

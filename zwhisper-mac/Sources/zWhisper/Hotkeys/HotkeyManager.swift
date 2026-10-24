@@ -1,24 +1,25 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
     /// Spec §4.1: toggle recording.
-    static let toggleRecording = Self("toggleRecording", default: .init(.space, modifiers: [.option, .shift]))
+    static let toggleRecording = Self("toggleRecording", initial: .init(.space, modifiers: [.option, .shift]))
     /// §3.5 push-to-talk. Legacy read/unregister only (migration to
     /// PTTShortcut in UserDefaults) — never register this name: a handler-less
     /// Carbon hotkey swallows the key system-wide.
     static let pushToTalk = Self("pushToTalk")
     /// §3.5: change mode (cycle), ⌥⇧K.
-    static let changeModeCycle = Self("changeModeCycle", default: .init(.k, modifiers: [.option, .shift]))
+    static let changeModeCycle = Self("changeModeCycle", initial: .init(.k, modifiers: [.option, .shift]))
     /// §4.2: ⌘1–⌘7 live mode select (built-in library indices).
-    static let modeDigit1 = Self("modeDigit1", default: .init(.one, modifiers: [.command]))
-    static let modeDigit2 = Self("modeDigit2", default: .init(.two, modifiers: [.command]))
-    static let modeDigit3 = Self("modeDigit3", default: .init(.three, modifiers: [.command]))
-    static let modeDigit4 = Self("modeDigit4", default: .init(.four, modifiers: [.command]))
-    static let modeDigit5 = Self("modeDigit5", default: .init(.five, modifiers: [.command]))
-    static let modeDigit6 = Self("modeDigit6", default: .init(.six, modifiers: [.command]))
-    static let modeDigit7 = Self("modeDigit7", default: .init(.seven, modifiers: [.command]))
+    static let modeDigit1 = Self("modeDigit1", initial: .init(.one, modifiers: [.command]))
+    static let modeDigit2 = Self("modeDigit2", initial: .init(.two, modifiers: [.command]))
+    static let modeDigit3 = Self("modeDigit3", initial: .init(.three, modifiers: [.command]))
+    static let modeDigit4 = Self("modeDigit4", initial: .init(.four, modifiers: [.command]))
+    static let modeDigit5 = Self("modeDigit5", initial: .init(.five, modifiers: [.command]))
+    static let modeDigit6 = Self("modeDigit6", initial: .init(.six, modifiers: [.command]))
+    static let modeDigit7 = Self("modeDigit7", initial: .init(.seven, modifiers: [.command]))
 
     static let modeDigits: [KeyboardShortcuts.Name] = [
         modeDigit1, modeDigit2, modeDigit3, modeDigit4, modeDigit5, modeDigit6, modeDigit7,
@@ -113,8 +114,14 @@ final class HotkeyManager {
         }
         KeyboardShortcuts.setShortcut(nil, for: .pushToTalk)
 
+        AppState.logToStderr(
+            "ptt setup: ax=\(AXIsProcessTrusted()) listenEvent=\(CGPreflightListenEventAccess()) \(Self.secureInputDescription())"
+        )
+        watchSecureInput()
+
         NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             guard let self, event.keyCode == Self.rightCommandKeyCode else { return }
+            AppState.logToStderr("ptt right⌘ \(event.modifierFlags.contains(.command) ? "down" : "up") (global)")
             // Right ⌘ pressed vs released: the .command flag flips with it.
             if event.modifierFlags.contains(.command) {
                 self.pttPress(onStart)
@@ -148,6 +155,7 @@ final class HotkeyManager {
         // Same handling when our own app is key (e.g. the mode pill).
         NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             guard let self, event.keyCode == Self.rightCommandKeyCode else { return event }
+            AppState.logToStderr("ptt right⌘ \(event.modifierFlags.contains(.command) ? "down" : "up") (local)")
             if event.modifierFlags.contains(.command) {
                 self.pttPress(onStart)
             } else {
@@ -157,8 +165,36 @@ final class HotkeyManager {
         }
     }
 
+    /// Diagnostics: while Secure Keyboard Entry is on (any app, or a stale
+    /// grant left over from loginwindow), global key monitors receive nothing,
+    /// so PTT goes dead without an error. Log transitions and the holder.
+    private func watchSecureInput() {
+        Task { @MainActor in
+            var last = IsSecureEventInputEnabled()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                let now = IsSecureEventInputEnabled()
+                if now != last {
+                    AppState.logToStderr("secure input changed: \(Self.secureInputDescription())")
+                    last = now
+                }
+            }
+        }
+    }
+
+    private static func secureInputDescription() -> String {
+        guard IsSecureEventInputEnabled() else { return "secureInput=off" }
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        guard let pid = session?["kCGSSessionSecureInputPID"] as? Int32 else { return "secureInput=on" }
+        let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+        return "secureInput=on (pid \(pid) \(name))"
+    }
+
     private func pttPress(_ action: @escaping @MainActor () -> Void) {
-        guard !pttHeld else { return }
+        guard !pttHeld else {
+            AppState.logToStderr("ptt press ignored (already held)")
+            return
+        }
         pttHeld = true
         Task { @MainActor in action() }
     }
@@ -260,7 +296,20 @@ enum CancelShortcut {
     static let escape = KeyChord(keyCode: 53, modifiers: 0)
     static var current: KeyChord { KeyChord.load(defaultsKey: defaultsKey) ?? CancelShortcut.escape }
     static func store(_ chord: KeyChord) { KeyChord.save(chord, defaultsKey: defaultsKey) }
+    static func clear() { KeyChord.clear(defaultsKey: defaultsKey) }
     static func matches(_ event: NSEvent) -> Bool { current.matches(event) }
+}
+
+/// Settings → Shortcuts "Reset to defaults" (§6.6): ⌥⇧Space toggle, right-⌘
+/// PTT, Esc cancel, ⌥⇧K cycle. ⌘-digits are left alone — HotkeyManager
+/// claims/releases them with popover visibility.
+enum ShortcutDefaults {
+    @MainActor
+    static func restore() {
+        KeyboardShortcuts.reset(.toggleRecording, .changeModeCycle)
+        PTTShortcut.clear()
+        CancelShortcut.clear()
+    }
 }
 
 /// Custom push-to-talk key (§3.5). Nil = the default hold on right ⌘.
