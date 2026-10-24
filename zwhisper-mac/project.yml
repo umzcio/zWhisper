@@ -55,6 +55,7 @@ targets:
         LSUIElement: true
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: zWhisper needs microphone access to record and transcribe your dictation.
+        SUEnableAutomaticChecks: true
         SUFeedURL: https://raw.githubusercontent.com/umzcio/zWhisper/main/appcast.xml
         SUPublicEDKey: 7KQVNte/Z3ts81v6gETASf21YKulzZZTiqMpF8uv5G8=
     settings:

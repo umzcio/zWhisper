@@ -66,6 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WindowActions.appState = appState
 
         statusItemController = StatusItemController(appState: appState)
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            _ = UpdateController.shared
+        }
         appState.setModeDigitsEnabled = { [hotkeyManager] enabled in
             hotkeyManager.setModeDigitsEnabled(enabled)
         }

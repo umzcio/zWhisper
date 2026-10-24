@@ -5,7 +5,8 @@ import KeyboardShortcuts
 import SwiftUI
 
 /// Settings screen (spec §6.6): centered toolbar tab strip + four panes
-/// (General / Sound / Shortcuts / Usage), all bound to `settings.json`.
+/// (General / Sound / Shortcuts / Usage), all bound to `settings.json`, plus
+/// About (version + Sparkle updates).
 struct SettingsView: View {
     @Bindable var appState: AppState
 
@@ -21,6 +22,7 @@ struct SettingsView: View {
                 case .sound: SoundPane(appState: appState)
                 case .shortcuts: ShortcutsPane()
                 case .usage: UsagePane(appState: appState)
+                case .about: AboutPane()
                 }
             }
             .id(tab)
@@ -31,7 +33,7 @@ struct SettingsView: View {
         .onChange(of: appState.settings) { appState.settingsDidChange() }
     }
 
-    /// §6.6: centered strip (border-b), four 64px items, icon 19px over
+    /// §6.6: centered strip (border-b), 64px items, icon 19px over
     /// 11px/500 label, sliding surface-3/70 rounded-8 indicator.
     private var tabStrip: some View {
         HStack(spacing: 4) {
@@ -72,7 +74,7 @@ struct SettingsView: View {
 
 /// §6.6 toolbar tabs.
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, sound, shortcuts, usage
+    case general, sound, shortcuts, usage, about
 
     var id: String { rawValue }
 
@@ -82,6 +84,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .sound: "Sound"
         case .shortcuts: "Shortcuts"
         case .usage: "Usage"
+        case .about: "About"
         }
     }
 
@@ -91,6 +94,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .sound: "waveform"
         case .shortcuts: "keyboard"
         case .usage: "chart.bar"
+        case .about: "info.circle"
         }
     }
 }
@@ -307,15 +311,6 @@ private struct GeneralPane: View {
                     }
                 }
             }
-
-            VStack(spacing: 8) {
-                ZWAppIcon(size: 32)
-                Text("zWhisper v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") — on-device dictation")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ZWColor.text3)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 4)
         }
         .settingsPane()
     }
@@ -591,6 +586,63 @@ private struct ShortcutChip: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .strokeBorder(ZWColor.separator)
             )
+    }
+}
+
+// MARK: - About pane
+
+private struct AboutPane: View {
+    private let updater = UpdateController.shared
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "Version \(short) (\(build))"
+    }
+
+    var body: some View {
+        Group {
+            HStack(spacing: 16) {
+                ZWAppIcon(size: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("zWhisper")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(ZWColor.text1)
+                    Text(version)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ZWColor.text3)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(ZWColor.surface2)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            SettingsGroup(title: "Updates") {
+                SettingsRow(label: "Automatically check for updates", caption: nil, infoTip: nil, showsSeparator: true) {
+                    Toggle("", isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates },
+                        set: { updater.setAutomaticChecks($0) }
+                    ))
+                    .labelsHidden()
+                }
+                SettingsRow(label: "Software update", caption: lastChecked, infoTip: nil) {
+                    Button("Check for Updates…") { updater.checkForUpdates() }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ZWColor.accentBlue)
+                        .buttonStyle(ZWButtonStyle(pressScale: 0.96))
+                        .disabled(!updater.canCheckForUpdates)
+                        .opacity(updater.canCheckForUpdates ? 1 : 0.5)
+                }
+            }
+        }
+        .settingsPane()
+    }
+
+    private var lastChecked: String {
+        guard let date = updater.lastUpdateCheckDate else { return "Not checked yet" }
+        return "Last checked \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 

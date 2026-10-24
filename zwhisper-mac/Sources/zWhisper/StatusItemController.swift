@@ -12,8 +12,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
 
     init(appState: AppState) {
+        // Variable length, never a fixed one: on macOS 26+ the bar gives a fixed
+        // 26pt item a wider slot and pins the button to its left edge, so the
+        // icon and the popover arrow sit off-center in the highlight.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.length = 26
         super.init()
         if let button = statusItem.button {
             button.image = NSImage(named: "zMenubarIcon")
@@ -32,6 +34,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
                 self?.popover.performClose(nil)
             }
         )
+        // Without this the popover positions itself for a default 320pt width,
+        // then shrinks to the 264pt panel keeping its left edge — off-center.
+        host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
     }
 
@@ -90,7 +95,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func menuUpdates() {
-        UpdateController.checkForUpdates()
+        UpdateController.shared.checkForUpdates()
     }
 
     @objc private func menuQuit() {
