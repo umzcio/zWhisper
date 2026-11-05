@@ -184,3 +184,63 @@ struct PasteControllerTests {
         #expect(pasteboard.string(forType: .string) == "TRANSCRIPT")
     }
 }
+
+@Suite("SmartJoin")
+struct SmartJoinTests {
+    @Test("a new dictation after a sentence gets its space")
+    func spaceAfterSentence() {
+        #expect(SmartJoin.adjust("Then farted.", preceding: "Then the fox ran to the moon.") == " Then farted.")
+    }
+
+    @Test("sentence starts are capitalized")
+    func capitalizes() {
+        #expect(SmartJoin.adjust("then it left.", preceding: "It ran.") == " Then it left.")
+        #expect(SmartJoin.adjust("then it left.", preceding: "It ran. ") == "Then it left.")
+        #expect(SmartJoin.adjust("then it left.", preceding: "He said \"run.\"") == " Then it left.")
+        #expect(SmartJoin.adjust("then it left.", preceding: "Title\n") == "Then it left.")
+        #expect(SmartJoin.adjust("then it left.", preceding: "") == "Then it left.")
+    }
+
+    @Test("capitals the transcriber adds are dropped mid-sentence, but only from a closed word list")
+    func continuation() {
+        #expect(SmartJoin.adjust("And then it left.", preceding: "It ran") == " and then it left.")
+        #expect(SmartJoin.adjust("The moon.", preceding: "It ran to,") == " the moon.")
+        #expect(SmartJoin.adjust("The moon.", preceding: "It ran to ") == "the moon.")
+        #expect(SmartJoin.adjust("Zach left.", preceding: "I saw") == " Zach left.")
+        #expect(SmartJoin.adjust("I left.", preceding: "and then") == " I left.")
+        #expect(SmartJoin.adjust("NASA left.", preceding: "and then") == " NASA left.")
+        #expect(SmartJoin.adjust("THE moon.", preceding: "and then") == " THE moon.")
+    }
+
+    @Test("no space where one would be wrong")
+    func noSpace() {
+        #expect(SmartJoin.adjust("Hello.", preceding: "Say (") == "Hello.")
+        #expect(SmartJoin.adjust("Hello.", preceding: "Say \"") == "Hello.")
+        #expect(SmartJoin.adjust("Hello.", preceding: "well-") == "Hello.")
+        #expect(SmartJoin.adjust("Hello.", preceding: "~/src/") == "Hello.")
+        #expect(SmartJoin.adjust(", then.", preceding: "It ran") == ", then.")
+        #expect(SmartJoin.adjust(" Hello.", preceding: "It ran.") == " Hello.")
+    }
+
+    @Test("a closing quote still gets a space; an opening one does not")
+    func straightQuotes() {
+        #expect(SmartJoin.adjust("Hello.", preceding: "\"run\"") == " Hello.")
+        #expect(SmartJoin.adjust("Hello.", preceding: "say \"") == "Hello.")
+    }
+
+    @Test("casing is kept for mixed-case words and unknown endings; unknown context changes nothing")
+    func leftAlone() {
+        #expect(SmartJoin.adjust("iPhone sales rose.", preceding: "It ran.") == " iPhone sales rose.")
+        #expect(SmartJoin.adjust("And left.", preceding: "user@host % ") == "And left.")
+        #expect(SmartJoin.adjust("and left.", preceding: nil) == "and left.")
+        #expect(SmartJoin.adjust("", preceding: "It ran.") == "")
+    }
+
+    @Test("the caret counts as unmoved only with no key or click since the paste")
+    func caretUnmoved() {
+        #expect(SmartJoin.isCaretUnmoved(elapsed: 5, sinceKeyDown: 5.1, sinceClick: 60))
+        #expect(SmartJoin.isCaretUnmoved(elapsed: 5, sinceKeyDown: 4.9, sinceClick: 60)) // our own ⌘V landing
+        #expect(!SmartJoin.isCaretUnmoved(elapsed: 5, sinceKeyDown: 2, sinceClick: 60))
+        #expect(!SmartJoin.isCaretUnmoved(elapsed: 5, sinceKeyDown: 60, sinceClick: 2))
+    }
+}

@@ -27,8 +27,8 @@ protocol PasteControllerProtocol: Sendable {
     func copy(text: String) async
 }
 
-/// Full paste sequence (architecture §8): snapshot the clipboard → write the
-/// transcript → read the frontmost app for the toast label → post CGEvent ⌘V →
+/// Full paste sequence (architecture §8): fit the transcript to the text before
+/// the caret (`SmartJoin`) → snapshot the clipboard → write the transcript → read the frontmost app for the toast label → post CGEvent ⌘V →
 /// wait until the target has actually read the transcript → restore the
 /// snapshot when Settings → Paste "Restore clipboard" is on.
 ///
@@ -47,8 +47,12 @@ final class PasteController: PasteControllerProtocol {
     nonisolated static let readGrace: Duration = .milliseconds(150)
     /// Kept alive while its lazy item may still be on the clipboard.
     private var provider: TranscriptProvider?
+    /// Stands in for the text before the caret where AX can't read it.
+    private var lastPaste: (pid: pid_t, text: String, at: Date)?
 
     func paste(text: String, restoreClipboard: Bool) async throws -> PasteReceipt {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let text = SmartJoin.adjust(text, preceding: await textBeforeCaret(in: frontmost))
         let pasteboard = NSPasteboard.general
         let snapshot = Self.snapshot(pasteboard)
 
@@ -70,7 +74,7 @@ final class PasteController: PasteControllerProtocol {
         }
         let changeCount = pasteboard.changeCount
 
-        let targetApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+        let targetApp = frontmost?.localizedName ?? ""
         let trusted = AXIsProcessTrusted()
         if !trusted, !didPromptForAccessibility {
             didPromptForAccessibility = true
@@ -83,6 +87,7 @@ final class PasteController: PasteControllerProtocol {
         if trusted {
             Self.postCommandV()
             didPaste = true
+            lastPaste = frontmost.map { ($0.processIdentifier, text, .now) }
         }
 
         // Restore only after a real paste; when degraded (§8) the transcript
@@ -131,6 +136,64 @@ final class PasteController: PasteControllerProtocol {
             item.setData(data, forType: type)
         }
         pasteboard.writeObjects([item])
+    }
+
+    /// AX first; apps that don't expose it (terminals, some Electron and web
+    /// fields) or wrongly report an empty field fall back to our own last paste
+    /// when no key or click can have moved the caret since. Read only to fit
+    /// this paste: never logged, stored, or sent to a model.
+    private func textBeforeCaret(in app: NSRunningApplication?) async -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let read = await Task.detached { Self.readBeforeCaret() }.value
+        if let read, !read.isEmpty { return read }
+        guard let lastPaste, lastPaste.pid == app?.processIdentifier,
+              SmartJoin.isCaretUnmoved(
+                  elapsed: Date.now.timeIntervalSince(lastPaste.at),
+                  sinceKeyDown: CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
+                  sinceClick: CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
+              )
+        else { return read }
+        return lastPaste.text
+    }
+
+    private nonisolated static func readBeforeCaret() -> String? {
+        let maxLength = 64
+        let system = AXUIElementCreateSystemWide()
+        // AX waits 6s on a hung app by default; never hold a paste that long.
+        AXUIElementSetMessagingTimeout(system, 0.15)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
+        else { return nil }
+        let element = focused as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.15)
+
+        var subrole: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole)
+        guard subrole as? String != kAXSecureTextFieldSubrole else { return nil }
+
+        var rangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success,
+              let rangeValue, CFGetTypeID(rangeValue) == AXValueGetTypeID()
+        else { return nil }
+        var selection = CFRange()
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &selection), selection.location != kCFNotFound else { return nil }
+        guard selection.location > 0 else { return "" }
+
+        let start = max(0, selection.location - maxLength)
+        var query = CFRange(location: start, length: selection.location - start)
+        if let parameter = AXValueCreate(.cfRange, &query) {
+            var string: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &string) == .success,
+               let string = string as? String {
+                return string
+            }
+        }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let whole = value as? NSString, selection.location <= whole.length
+        else { return nil }
+        return whole.substring(with: NSRange(location: query.location, length: query.length))
     }
 
     /// Serves the transcript on demand and records that it was read.
