@@ -160,6 +160,12 @@ final class AppState {
     // MARK: Models (M6)
 
     private(set) var modelPreferences = ModelPreferences()
+    /// Why the last cloud request failed; cleared by the next success.
+    private(set) var cloudFailureMessage: String?
+    /// The last final pass fell back to the local model; reported once at paste.
+    private var usedLocalFallback = false
+    /// Real download sizes by variant, when the model repo could be reached.
+    var modelSizeLabels: [String: String] = [:]
     /// Per-variant row state for the §6.4 Models screen (locals only).
     private(set) var modelStates: [String: ModelDownloadStatus] = [:]
     private var downloadTasks: [String: Task<Void, Never>] = [:]
@@ -190,6 +196,8 @@ final class AppState {
     private var lastHistoryEntryID: UUID?
     /// True between a start trigger and `phase = .recording`; closes the
     /// double-start window while permission/engine awaits are in flight.
+    private let cloudAPIKey: @Sendable (String) -> String?
+    private let makeCloudTranscriber: @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing
     private var startInFlight = false
     private var metering = false
 
@@ -205,7 +213,11 @@ final class AppState {
         modeProcessor: ModeProcessorProtocol = ModeProcessor.makeDefault(),
         paste: PasteControllerProtocol = PasteController(),
         persistence: PersistenceStore = PersistenceStore(),
-        requestRecordPermission: @escaping @Sendable () async -> Bool = AppState.requestSystemRecordPermission
+        requestRecordPermission: @escaping @Sendable () async -> Bool = AppState.requestSystemRecordPermission,
+        cloudAPIKey: @escaping @Sendable (String) -> String? = { KeychainStore.apiKey(for: $0) },
+        makeCloudTranscriber: @escaping @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing = {
+            CloudTranscriber(provider: $0, apiKey: $1, server: $2)
+        }
     ) {
         self.audio = audio
         self.transcription = transcription
@@ -213,6 +225,8 @@ final class AppState {
         self.paste = paste
         self.persistence = persistence
         self.requestRecordPermission = requestRecordPermission
+        self.cloudAPIKey = cloudAPIKey
+        self.makeCloudTranscriber = makeCloudTranscriber
     }
 
     /// The AVCaptureDevice path is what zMeet (same team ID) ships — proven to
@@ -243,7 +257,17 @@ final class AppState {
             if let activeID = modelPreferences.activeLocalID,
                ModelDownloadManager.isDownloaded(variant: activeID)
             {
-                try await transcription.loadModel(at: ModelDownloadManager.modelFolder(forVariant: activeID))
+                if activeCloudProvider == nil {
+                    try await transcription.loadModel(activeID)
+                } else {
+                    try? await transcription.loadModel(activeID)
+                }
+            } else if activeCloudProvider != nil {
+                // Cloud needs no download; a model already on disk still gives
+                // the live preview and the fallback.
+                if let installed = ModelCatalogEntry.locals.first(where: { ModelDownloadManager.isDownloaded(variant: $0.id) }) {
+                    try? await transcription.loadModel(installed.id)
+                }
             } else {
                 try await transcription.load { [weak self] fraction in
                     Task { @MainActor in self?.modelStatus = .downloading(fraction) }
@@ -339,8 +363,15 @@ final class AppState {
 
     func loadModelPreferences() async {
         modelPreferences = (try? await persistence.load(ModelPreferences.self, from: "models.json")) ?? ModelPreferences()
+        if let cloudID = modelPreferences.activeCloudID {
+            if let provider = CloudTranscriptionProvider(rawValue: cloudID), isCloudProviderReady(provider) {
+                modelStates[cloudID] = .active
+            } else {
+                modelPreferences.activeCloudID = nil
+            }
+        }
         for entry in ModelCatalogEntry.locals {
-            if modelPreferences.activeLocalID == entry.id, ModelDownloadManager.isDownloaded(variant: entry.id) {
+            if modelPreferences.activeCloudID == nil, modelPreferences.activeLocalID == entry.id, ModelDownloadManager.isDownloaded(variant: entry.id) {
                 modelStates[entry.id] = .active
             } else if ModelDownloadManager.isDownloaded(variant: entry.id) {
                 modelStates[entry.id] = .downloaded
@@ -380,10 +411,10 @@ final class AppState {
             guard let self else { return }
             do {
                 _ = try await ModelDownloadManager().download(variant: id) { progress in
-                    let speed = tracker.sample(bytes: progress.completedUnitCount)
+                    let speed = tracker.sample(bytes: progress.bytes)
                     Task { @MainActor in
                         if case .downloading = self.modelStates[id] {
-                            self.modelStates[id] = .downloading(progress: progress.fractionCompleted, bytesPerSecond: speed)
+                            self.modelStates[id] = .downloading(progress: progress.fraction, bytesPerSecond: speed)
                         }
                     }
                 }
@@ -430,22 +461,140 @@ final class AppState {
         }
     }
 
+    /// Replaces the catalog's fallback size labels; a failed fetch keeps the fallback.
+    func refreshModelSizes() async {
+        guard modelSizeLabels.isEmpty else { return }
+        await withTaskGroup(of: (String, String?).self) { group in
+            for entry in ModelCatalogEntry.locals {
+                group.addTask { (entry.id, await ModelDownloadManager.fetchSizeLabel(forVariant: entry.id)) }
+            }
+            for await (id, label) in group {
+                if let label { modelSizeLabels[id] = label }
+            }
+        }
+    }
+
     /// §6.4 Set Active: reloads the transcription engine on the new variant.
     func setActiveModel(_ id: String) {
         guard ModelDownloadManager.isDownloaded(variant: id) else { return }
         Task { @MainActor in
             do {
-                try await transcription.loadModel(at: ModelDownloadManager.modelFolder(forVariant: id))
-                for key in modelStates.keys where modelStates[key] == .active {
-                    modelStates[key] = .downloaded
-                }
+                try await transcription.loadModel(id)
+                clearActiveState()
                 modelStates[id] = .active
                 modelPreferences.activeLocalID = id
+                modelPreferences.activeCloudID = nil
+                cloudFailureMessage = nil
                 saveModelPreferences()
                 Self.logToStderr("active model: \(id)")
             } catch {
                 Self.logToStderr("setActiveModel failed (\(id)): \(error)")
             }
+        }
+    }
+
+    var activeCloudProvider: CloudTranscriptionProvider? {
+        modelPreferences.activeCloudID.flatMap(CloudTranscriptionProvider.init(rawValue:))
+    }
+
+    /// A key for the hosted providers; a valid server URL and model for self-hosted
+    /// (whose key is optional).
+    func isCloudProviderReady(_ provider: CloudTranscriptionProvider) -> Bool {
+        provider == .selfHosted
+            ? modelPreferences.selfHostedServer?.isValid == true
+            : hasCloudAPIKey(for: provider.keychainAccount)
+    }
+
+    func saveSelfHostedServer(_ server: SelfHostedServer, apiKey: String) {
+        modelPreferences.selfHostedServer = server
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty {
+            KeychainStore.setAPIKey(key, for: CloudTranscriptionProvider.selfHosted.keychainAccount)
+        }
+        saveModelPreferences()
+    }
+
+    func removeSelfHostedServer() {
+        modelPreferences.selfHostedServer = nil
+        saveModelPreferences()
+        removeCloudAPIKey(for: CloudTranscriptionProvider.selfHosted.keychainAccount)
+    }
+
+    /// Requires the provider to be ready. From here on, final transcripts go to it.
+    func setActiveCloudModel(_ id: String) {
+        guard let provider = CloudTranscriptionProvider(rawValue: id), isCloudProviderReady(provider) else { return }
+        clearActiveState()
+        modelStates[id] = .active
+        modelPreferences.activeCloudID = id
+        cloudFailureMessage = nil
+        // Cloud works even if the local model failed to download.
+        if modelStatus == .failed { modelStatus = .ready }
+        saveModelPreferences()
+        Self.logToStderr("active model: \(id) (cloud)")
+    }
+
+    private func clearActiveState() {
+        for key in modelStates.keys where modelStates[key] == .active {
+            modelStates[key] = CloudTranscriptionProvider(rawValue: key) == nil ? .downloaded : ModelDownloadStatus.none
+        }
+    }
+
+    /// Back to on-device when the active provider's key goes away.
+    func removeCloudAPIKey(for account: String) {
+        KeychainStore.deleteAPIKey(for: account)
+        modeProcessor = ModeProcessor.makeDefault()
+        guard activeCloudProvider?.keychainAccount == account else { return }
+        clearActiveState()
+        modelPreferences.activeCloudID = nil
+        cloudFailureMessage = nil
+        saveModelPreferences()
+        let isInstalled = { (id: String) in ModelDownloadManager.isDownloaded(variant: id) }
+        if let local = modelPreferences.activeLocalID.flatMap({ isInstalled($0) ? $0 : nil })
+            ?? ModelCatalogEntry.locals.first(where: { isInstalled($0.id) })?.id
+        {
+            setActiveModel(local)
+            return
+        }
+        modelStatus = .downloading(0)
+        Task { @MainActor in
+            do {
+                try await transcription.load { [weak self] fraction in
+                    Task { @MainActor in self?.modelStatus = .downloading(fraction) }
+                }
+                modelStates[ModelDownloadManager.defaultModelName] = .active
+                modelStatus = .ready
+            } catch {
+                modelStatus = .failed
+            }
+        }
+    }
+
+    /// Cloud when a provider is active. Translate-to-English stays local: only
+    /// Groq has a translation endpoint. A failure falls back to the local model
+    /// so the dictation isn't lost; if there is none, the failure propagates.
+    private func finalTranscript(for audio: AVAudioPCMBuffer) async throws -> Transcript {
+        guard let provider = activeCloudProvider, !settings.translateToEnglish, isCloudProviderReady(provider) else {
+            return try await transcription.transcribeFinal(audio)
+        }
+        do {
+            let transcriber = makeCloudTranscriber(provider, cloudAPIKey(provider.keychainAccount), modelPreferences.selfHostedServer)
+            let text = try await transcriber.transcribe(
+                wav: WAVEncoder.data(from: audio),
+                language: settings.language == "auto" ? nil : settings.language,
+                vocabulary: vocabulary.customWords.map(\.text)
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            await transcription.resetStream()
+            cloudFailureMessage = nil
+            let segments = text.isEmpty ? [] : [TranscriptSegment(text: text, start: 0, end: lastSessionDuration)]
+            return Transcript(text: text, segments: segments)
+        } catch {
+            guard case .transcribing = phase else { throw error } // cancelled
+            let message = (error as? CloudTranscriptionError)?.message(for: provider) ?? "\(provider.name) request failed."
+            cloudFailureMessage = message
+            Self.logToStderr("cloud transcription failed: \(message)")
+            let transcript = try await transcription.transcribeFinal(audio)
+            usedLocalFallback = true
+            return transcript
         }
     }
 
@@ -460,7 +609,7 @@ final class AppState {
     }
 
     func hasCloudAPIKey(for account: String) -> Bool {
-        KeychainStore.apiKey(for: account) != nil
+        cloudAPIKey(account) != nil
     }
 
     // MARK: History (M4)
@@ -786,7 +935,7 @@ final class AppState {
             waveform.beginSettle(now: .now, barCount: popoverSize == .main ? 48 : 28)
             do {
                 let started = ContinuousClock.now
-                let transcript = try await transcription.transcribeFinal(sessionAudio)
+                let transcript = try await finalTranscript(for: sessionAudio)
                 let elapsed = ContinuousClock.now - started
                 Self.logToStderr("final transcription pass: \(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)ms, \(transcript.text.count) chars")
                 guard case .transcribing = phase else { return } // cancelled meanwhile
@@ -876,6 +1025,10 @@ final class AppState {
         } else {
             pasteSubtitle = "Saved to clipboard"
         }
+        if usedLocalFallback {
+            pasteSubtitle += " · used on-device"
+            usedLocalFallback = false
+        }
         phase = .pasted(appName: receipt?.targetApp ?? "")
 
         if reprocess {
@@ -950,7 +1103,11 @@ final class AppState {
             autoStopTask?.cancel()
             phase = .idle
             waveform.reset()
-            Task { await audio.cancel() }
+            // The live preview must not carry this audio into the next session.
+            Task {
+                await audio.cancel()
+                await transcription.resetStream()
+            }
         case .transcribing, .processing:
             transcriptionTask?.cancel()
             phase = .idle

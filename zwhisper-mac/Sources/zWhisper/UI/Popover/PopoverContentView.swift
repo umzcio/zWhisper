@@ -223,10 +223,10 @@ struct PopoverContentView: View {
                 } else if appState.modelStatus == .failed {
                     hint("Speech model failed to download — check your connection.")
                 } else if appState.transcriptionFailed {
-                    hint("Transcription failed — try again.")
+                    hint(appState.cloudFailureMessage ?? "Transcription failed — try again.")
                 } else if appState.modeProcessingFailed {
                     // §8/§10.4: actionable failure, never a spinner
-                    hint("\(appState.failedModeName) mode needs Apple Intelligence or a cloud key.")
+                    hint("\(appState.failedModeName) mode needs Apple Intelligence or an OpenAI key.")
                 } else if !appState.transcriptText.isEmpty {
                     StreamingText(text: appState.transcriptText, highlightLastWord: false)
                 } else {

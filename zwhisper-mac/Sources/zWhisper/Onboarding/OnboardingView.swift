@@ -172,7 +172,7 @@ struct OnboardingView: View {
                     grantedRow("Apple Intelligence ready — modes rewrite on-device")
                 } else {
                     // §8: informational, non-blocking.
-                    Label("Modes other than Voice Note need Apple Intelligence or a cloud key.", systemImage: "exclamationmark.triangle.fill")
+                    Label("Modes other than Voice Note need Apple Intelligence or an OpenAI key.", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(ZWColor.accentOrange)
                         .padding(.horizontal, 12)
@@ -360,10 +360,10 @@ struct OnboardingView: View {
             downloadState = .downloading(progress: 0, bytesPerSecond: 0)
             do {
                 _ = try await ModelDownloadManager().download(variant: modelName) { progress in
-                    let speed = tracker.sample(bytes: progress.completedUnitCount)
+                    let speed = tracker.sample(bytes: progress.bytes)
                     Task { @MainActor in
                         if case .downloading = downloadState {
-                            downloadState = .downloading(progress: progress.fractionCompleted, bytesPerSecond: speed)
+                            downloadState = .downloading(progress: progress.fraction, bytesPerSecond: speed)
                         }
                     }
                 }

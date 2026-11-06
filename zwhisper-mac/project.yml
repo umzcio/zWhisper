@@ -22,13 +22,18 @@ packages:
   # Architecture §2 — SPM pins
   WhisperKit:
     url: https://github.com/argmaxinc/argmax-oss-swift
-    from: 1.0.0
+    from: 1.1.1
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 3.1.0
   LaunchAtLogin:
     url: https://github.com/sindresorhus/LaunchAtLogin-Modern
     from: 1.0.0
+  # On-device Parakeet and Nemotron (CoreML/ANE). Pinned exactly: pre-1.0, so
+  # review each upgrade (scripts/check-models.sh reports new releases).
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: 0.18.2
   # Sparkle: direct distribution only (architecture §2) — excluded from any MAS build.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
@@ -56,6 +61,9 @@ targets:
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: zWhisper needs microphone access to record and transcribe your dictation.
         SUEnableAutomaticChecks: true
+        # Self-hosted transcription servers on the LAN are often plain http.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         SUFeedURL: https://raw.githubusercontent.com/umzcio/zWhisper/main/appcast.xml
         SUPublicEDKey: 7KQVNte/Z3ts81v6gETASf21YKulzZZTiqMpF8uv5G8=
     settings:
@@ -68,6 +76,8 @@ targets:
     dependencies:
       - package: WhisperKit
         product: WhisperKit
+      - package: FluidAudio
+        product: FluidAudio
       - package: KeyboardShortcuts
         product: KeyboardShortcuts
       - package: LaunchAtLogin

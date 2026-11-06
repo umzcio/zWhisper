@@ -14,6 +14,8 @@ actor MockTranscriptionEngine: TranscriptionEngineProtocol {
     private(set) var fedBuffers = 0
     /// Artificial delay before the final transcript returns (transcribing-phase tests).
     var finalDelay: Duration = .zero
+    var finalError: Error?
+    private(set) var resetCalls = 0
     var finalResult = Transcript(text: "the quick brown fox", segments: [
         TranscriptSegment(text: " the quick brown fox", start: 0, end: 1.8),
     ])
@@ -36,12 +38,20 @@ actor MockTranscriptionEngine: TranscriptionEngineProtocol {
         finalResult = result
     }
 
+    func setFinalError(_ error: Error?) {
+        finalError = error
+    }
+
+    func resetStream() {
+        resetCalls += 1
+    }
+
     func load(progress: @Sendable (Double) -> Void) async throws {
         loadCalls += 1
         progress(1)
     }
 
-    func loadModel(at folder: URL) async throws {
+    func loadModel(_ id: String) async throws {
         loadCalls += 1
     }
 
@@ -60,6 +70,7 @@ actor MockTranscriptionEngine: TranscriptionEngineProtocol {
         if finalDelay > .zero {
             try? await Task.sleep(for: finalDelay)
         }
+        if let finalError { throw finalError }
         return finalResult
     }
 }

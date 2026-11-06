@@ -184,6 +184,21 @@ extension View {
 private struct GeneralPane: View {
     @Bindable var appState: AppState
 
+    @State private var hasOpenAIKey = false
+
+    /// The on-device engine in use (also the preview and fallback when cloud is active).
+    private var localFamily: LocalModelFamily {
+        LocalModelFamily(id: appState.modelPreferences.activeLocalID ?? ModelDownloadManager.defaultModelName)
+    }
+
+    private var languageCaption: String {
+        switch localFamily {
+        case .whisper: "100+ languages supported"
+        case .parakeet: "Parakeet: 25 European languages"
+        case .nemotron: "Nemotron: about 40 languages"
+        }
+    }
+
     var body: some View {
         Group {
             SettingsGroup(title: "Startup") {
@@ -275,8 +290,27 @@ private struct GeneralPane: View {
                 }
             }
 
+            SettingsGroup(title: "AI rewrites") {
+                SettingsRow(
+                    label: "OpenAI API key",
+                    caption: "Optional, used only when Apple Intelligence isn't available: the dictated text and any context the mode reads go to OpenAI. Choosing a cloud speech model is separate, in Models.",
+                    infoTip: nil
+                ) {
+                    ApiKeyButton(
+                        provider: "OpenAI",
+                        hasKey: hasOpenAIKey,
+                        appState: appState,
+                        onSaved: { hasOpenAIKey = true },
+                        onRemoved: { hasOpenAIKey = false }
+                    )
+                }
+            }
+            .onAppear {
+                hasOpenAIKey = appState.hasCloudAPIKey(for: CloudProviderConfig.openAI.keychainAccount)
+            }
+
             SettingsGroup(title: "Language") {
-                SettingsRow(label: "Spoken language", caption: "100+ languages supported", infoTip: nil, showsSeparator: true) {
+                SettingsRow(label: "Spoken language", caption: languageCaption, infoTip: nil, showsSeparator: true) {
                     Picker("", selection: $appState.settings.language) {
                         Text("Auto-detect").tag("auto")
                         Text("English").tag("en")
@@ -293,7 +327,7 @@ private struct GeneralPane: View {
                     .pickerStyle(.menu)
                     .frame(width: 168)
                 }
-                SettingsRow(label: "Translate to English", caption: nil, infoTip: nil) {
+                SettingsRow(label: "Translate to English", caption: localFamily.canTranslate ? nil : "Whisper models only. This model transcribes as spoken.", infoTip: nil) {
                     Toggle("", isOn: $appState.settings.translateToEnglish).labelsHidden()
                 }
             }

@@ -19,6 +19,15 @@ enum KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
+    static func deleteAPIKey(for account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     static func setAPIKey(_ key: String, for account: String) {
         let attributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -37,7 +46,7 @@ enum KeychainStore {
     }
 }
 
-/// BYOK provider metadata (§6.4 rows; the Models screen UI is M6).
+/// BYOK provider metadata for AI rewrites (key entry: Settings → General).
 struct CloudProviderConfig: Codable, Equatable, Sendable {
     var baseURL: String
     var model: String
@@ -46,7 +55,7 @@ struct CloudProviderConfig: Codable, Equatable, Sendable {
 
     static let openAI = CloudProviderConfig(
         baseURL: "https://api.openai.com",
-        model: "gpt-4o-mini",
+        model: "gpt-6-luna",
         keychainAccount: "openai"
     )
 }

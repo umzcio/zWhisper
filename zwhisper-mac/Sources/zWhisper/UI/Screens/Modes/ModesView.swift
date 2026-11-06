@@ -1000,7 +1000,7 @@ private struct ModeEditorSheet: View {
     private var afterContent: some View {
         if previewFailed {
             // §8 actionable failure (Apple Intelligence off, no cloud key).
-            Text("Requires Apple Intelligence or a cloud key")
+            Text("Requires Apple Intelligence or an OpenAI key")
                 .font(.system(size: 12))
                 .foregroundStyle(ZWColor.text2)
                 .frame(maxWidth: .infinity, alignment: .leading)

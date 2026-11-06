@@ -21,6 +21,9 @@ DIST="$ROOT/build/dist"
 DOWNLOAD_URL_PREFIX="https://github.com/umzcio/zWhisper/releases/download/v$VERSION/"
 SPARKLE_BIN="$ROOT/build/SourcePackages/artifacts/sparkle/Sparkle/bin"
 
+echo "==> Check models against upstream"
+bash "$ROOT/scripts/check-models.sh"
+
 echo "==> [1/6] Run the test suite"
 xcodebuild -project "$ROOT/zWhisper.xcodeproj" -scheme "$APP_NAME" -configuration Debug \
     -destination 'platform=macOS' \

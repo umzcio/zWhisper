@@ -32,7 +32,7 @@ private enum ModelSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-private let modelProviders = ["All providers", "OpenAI", "Anthropic", "Deepgram", "Groq"]
+private let modelProviders = ["All providers", "OpenAI", "Deepgram", "Groq", "Self-hosted"]
 
 /// §6.4 Models screen, embedded in the management window (M6).
 struct ModelsView: View {
@@ -50,13 +50,22 @@ struct ModelsView: View {
     /// §6.4 ActiveBanner: the local with state .active, else first downloaded,
     /// else first local.
     private var activeEntry: ModelCatalogEntry {
-        ModelCatalogEntry.locals.first { appState.modelStates[$0.id] == .active }
-            ?? ModelCatalogEntry.locals.first { appState.modelStates[$0.id] == .downloaded }
-            ?? ModelCatalogEntry.locals[0]
+        sized(
+            ModelCatalogEntry.all.first { appState.modelStates[$0.id] == .active }
+                ?? ModelCatalogEntry.locals.first { appState.modelStates[$0.id] == .downloaded }
+                ?? ModelCatalogEntry.locals[0]
+        )
+    }
+
+    private func sized(_ entry: ModelCatalogEntry) -> ModelCatalogEntry {
+        var entry = entry
+        if let label = appState.modelSizeLabels[entry.id] { entry.sizeLabel = label }
+        return entry
     }
 
     private var visibleEntries: [ModelCatalogEntry] {
-        let filtered = ModelCatalogEntry.all.filter { entry in
+        let filtered = ModelCatalogEntry.all.map(sized).filter { entry in
+            guard entry.runsOnThisMac else { return false }
             switch typeFilter {
             case .all: break
             case .local: if entry.isCloud { return false }
@@ -87,6 +96,7 @@ struct ModelsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ZWColor.surface1)
+        .task { await appState.refreshModelSizes() }
         .overlay(alignment: .bottom) {
             if let toastMessage {
                 ModelsToastPill(message: toastMessage)
@@ -105,12 +115,12 @@ struct ModelsView: View {
                     .font(.system(size: 20, weight: .bold))
                     .tracking(-0.4)
                     .foregroundStyle(ZWColor.text1)
-                Text("Local models run on-device and are unlimited. Cloud models use your own API keys.")
+                Text("Local models run on-device and are unlimited. Cloud models use your own API keys and send your audio to that provider.")
                     .font(.system(size: 12))
                     .foregroundStyle(ZWColor.text2)
             }
 
-            ActiveBanner(entry: activeEntry, onChange: onChange)
+            ActiveBanner(entry: activeEntry, failure: appState.cloudFailureMessage, onChange: onChange)
 
             ModelFilterBar(
                 typeFilter: $typeFilter,
@@ -138,9 +148,11 @@ struct ModelsView: View {
                         index: index,
                         status: appState.modelStates[entry.id] ?? .none,
                         starred: appState.modelPreferences.favoriteIDs.contains(entry.id),
-                        hasAPIKey: entry.provider.map { appState.hasCloudAPIKey(for: appState.cloudAPIKeyAccount(for: $0)) } ?? false,
+                        hasAPIKey: CloudTranscriptionProvider(rawValue: entry.id).map(appState.isCloudProviderReady) ?? false,
                         appState: appState,
-                        onKeySaved: { showToast("API key saved locally") }
+                        onKeySaved: { showToast("API key saved. Hover the row and press Set Active.") },
+                        onKeyRemoved: { showToast("API key removed") },
+                        onCloudActivated: { showToast("Your audio now goes to \($0) when you dictate.") }
                     )
                 }
                 if visibleEntries.isEmpty {
@@ -162,7 +174,7 @@ struct ModelsView: View {
 
     private var footer: some View {
         HStack {
-            Text("Local models run on-device. Audio never leaves your Mac.")
+            Text(footerText)
                 .font(.system(size: 11))
                 .foregroundStyle(ZWColor.text2)
             Spacer()
@@ -180,6 +192,16 @@ struct ModelsView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(ZWColor.separator).frame(height: 1)
         }
+    }
+
+    private var footerText: String {
+        if let provider = appState.activeCloudProvider {
+            if provider == .selfHosted, let host = appState.modelPreferences.selfHostedServer?.endpoint?.host() {
+                return "Self-hosted server active: your audio and custom vocabulary go to \(host)."
+            }
+            return "Cloud model active: your audio and custom vocabulary go to \(provider.name)."
+        }
+        return "Local model active. Audio never leaves your Mac."
     }
 
     /// §6.4 inline toast pill, bottom-center, 3s.
@@ -211,6 +233,7 @@ struct ModelsView: View {
 
 private struct ActiveBanner: View {
     let entry: ModelCatalogEntry
+    let failure: String?
     let onChange: () -> Void
 
     @State private var appeared = false
@@ -246,6 +269,11 @@ private struct ActiveBanner: View {
                 Text(metaLine)
                     .font(.system(size: 11))
                     .foregroundStyle(ZWColor.text3)
+                if entry.isCloud, let failure {
+                    Text("Last request failed, used on-device if available: \(failure)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ZWColor.accentRed)
+                }
             }
             .id(entry.id)
             .transition(.opacity)
@@ -454,6 +482,8 @@ private struct ModelRow: View {
     let hasAPIKey: Bool
     let appState: AppState
     let onKeySaved: () -> Void
+    let onKeyRemoved: () -> Void
+    let onCloudActivated: (String) -> Void
 
     @State private var hovering = false
     @State private var appeared = false
@@ -539,12 +569,34 @@ private struct ModelRow: View {
     @ViewBuilder
     private var stateControl: some View {
         if entry.isCloud {
-            ApiKeyButton(
-                provider: entry.provider ?? entry.engine,
-                hasKey: hasAPIKey,
-                appState: appState,
-                onSaved: onKeySaved
-            )
+            HStack(spacing: 4) {
+                if status == .active {
+                    statusLabel("Active")
+                } else if hasAPIKey, hovering {
+                    Button("Set Active") {
+                        appState.setActiveCloudModel(entry.id)
+                        onCloudActivated(entry.provider ?? entry.engine)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(ZWColor.accentBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .buttonStyle(ZWButtonStyle())
+                }
+                if entry.id == CloudTranscriptionProvider.selfHosted.rawValue {
+                    SelfHostedServerButton(isConfigured: hasAPIKey, appState: appState, onSaved: onKeySaved, onRemoved: onKeyRemoved)
+                } else {
+                    ApiKeyButton(
+                        provider: entry.provider ?? entry.engine,
+                        hasKey: hasAPIKey,
+                        appState: appState,
+                        onSaved: onKeySaved,
+                        onRemoved: onKeyRemoved
+                    )
+                }
+            }
         } else {
             switch status {
             case .none:
@@ -762,11 +814,12 @@ private struct ModelTrashButton: View {
 
 /// §6.4 ApiKeyPopover: gear → masked mono input, Save → Keychain + toast.
 /// Green dot while a key is stored.
-private struct ApiKeyButton: View {
+struct ApiKeyButton: View {
     let provider: String
     let hasKey: Bool
     let appState: AppState
     let onSaved: () -> Void
+    var onRemoved: () -> Void = {}
 
     @State private var open = false
     @State private var key = ""
@@ -778,21 +831,28 @@ private struct ApiKeyButton: View {
 
     var body: some View {
         Button { open.toggle() } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 14))
-                .foregroundStyle(hovering ? ZWColor.text2 : ZWColor.text3)
-                .frame(width: 28, height: 28)
-                .background(hovering ? ZWColor.surface3.opacity(0.7) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(Rectangle())
-                .overlay(alignment: .topTrailing) {
-                    if hasKey {
-                        Circle()
-                            .fill(ZWColor.accentGreen)
-                            .frame(width: 6, height: 6)
-                            .offset(x: -1, y: 1)
-                    }
+            HStack(spacing: 2) {
+                if !hasKey {
+                    Text("Add key")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(hovering ? ZWColor.text1 : ZWColor.text2)
                 }
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14))
+                    .foregroundStyle(hovering ? ZWColor.text2 : ZWColor.text3)
+                    .frame(width: 28, height: 28)
+                    .overlay(alignment: .topTrailing) {
+                        if hasKey {
+                            Circle()
+                                .fill(ZWColor.accentGreen)
+                                .frame(width: 6, height: 6)
+                                .offset(x: -1, y: 1)
+                        }
+                    }
+            }
+            .background(hovering ? ZWColor.surface3.opacity(0.7) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
         }
         .buttonStyle(ZWButtonStyle(hoverScale: 1.0, pressScale: 0.9))
         .onHover { hovering = $0 }
@@ -828,9 +888,20 @@ private struct ApiKeyButton: View {
                 .disabled(trimmedKey.isEmpty)
                 .keyboardShortcut(.defaultAction)
 
-                Text("Stored locally, never uploaded.")
+                Text("Stored in your Keychain, sent only to \(provider).")
                     .font(.system(size: 10))
                     .foregroundStyle(ZWColor.text3)
+
+                if hasKey {
+                    Button("Remove key") {
+                        appState.removeCloudAPIKey(for: appState.cloudAPIKeyAccount(for: provider))
+                        open = false
+                        onRemoved()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ZWColor.accentRed)
+                }
             }
             .padding(12)
             .frame(width: 240)
@@ -843,6 +914,136 @@ private struct ApiKeyButton: View {
         key = ""
         open = false
         onSaved()
+    }
+}
+
+/// Gear + popover for the self-hosted row: server URL, model, API style, optional key.
+private struct SelfHostedServerButton: View {
+    let isConfigured: Bool
+    let appState: AppState
+    let onSaved: () -> Void
+    let onRemoved: () -> Void
+
+    @State private var open = false
+    @State private var hovering = false
+    @State private var baseURL = ""
+    @State private var model = ""
+    @State private var style = SelfHostedServer.APIStyle.transcriptions
+    @State private var key = ""
+
+    private var draft: SelfHostedServer {
+        SelfHostedServer(baseURL: baseURL, model: model, style: style)
+    }
+
+    var body: some View {
+        Button {
+            let saved = appState.modelPreferences.selfHostedServer
+            baseURL = saved?.baseURL ?? ""
+            model = saved?.model ?? ""
+            style = saved?.style ?? .transcriptions
+            key = ""
+            open.toggle()
+        } label: {
+            HStack(spacing: 2) {
+                if !isConfigured {
+                    Text("Set up")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(hovering ? ZWColor.text1 : ZWColor.text2)
+                }
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14))
+                    .foregroundStyle(hovering ? ZWColor.text2 : ZWColor.text3)
+                    .frame(width: 28, height: 28)
+                    .overlay(alignment: .topTrailing) {
+                        if isConfigured {
+                            Circle().fill(ZWColor.accentGreen).frame(width: 6, height: 6).offset(x: -1, y: 1)
+                        }
+                    }
+            }
+            .background(hovering ? ZWColor.surface3.opacity(0.7) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ZWButtonStyle(hoverScale: 1.0, pressScale: 0.9))
+        .onHover { hovering = $0 }
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SELF-HOSTED SERVER")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.2)
+                    .foregroundStyle(ZWColor.text3)
+                field("http://gpu-box.local:8000", text: $baseURL)
+                field("Model, e.g. openai/whisper-large-v3", text: $model)
+                Picker("", selection: $style) {
+                    Text("Transcriptions API").tag(SelfHostedServer.APIStyle.transcriptions)
+                    Text("Chat + audio").tag(SelfHostedServer.APIStyle.chat)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                Text(style == .chat
+                    ? "vLLM serving Nemotron 3.5 Transcribe, llama.cpp."
+                    : "vLLM (Whisper, Canary), SGLang-Omni, whisper.cpp, LocalAI.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(ZWColor.text3)
+                SecureField(isConfigured ? "API key (unchanged if empty)" : "API key (optional)", text: $key)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(ZWColor.text1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(ZWColor.surface2)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(ZWColor.separator, lineWidth: 1))
+
+                Button {
+                    appState.saveSelfHostedServer(draft, apiKey: key)
+                    open = false
+                    onSaved()
+                } label: {
+                    Text("Save")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(ZWColor.accentBlue)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .opacity(draft.isValid ? 1 : 0.4)
+                }
+                .buttonStyle(ZWButtonStyle())
+                .disabled(!draft.isValid)
+                .keyboardShortcut(.defaultAction)
+
+                Text("Plain http only reaches local network addresses, and sends audio unencrypted.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(ZWColor.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if isConfigured {
+                    Button("Remove server") {
+                        appState.removeSelfHostedServer()
+                        open = false
+                        onRemoved()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ZWColor.accentRed)
+                }
+            }
+            .padding(12)
+            .frame(width: 300)
+        }
+    }
+
+    private func field(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(ZWColor.text1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(ZWColor.surface2)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(ZWColor.separator, lineWidth: 1))
     }
 }
 

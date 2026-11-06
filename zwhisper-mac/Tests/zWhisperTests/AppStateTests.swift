@@ -163,11 +163,32 @@ struct AppStateTests {
         ))
     }
 
+    @Test("every cloud row is backed by a provider that really transcribes")
+    func cloudRowsAreReal() {
+        let rows = Set(ModelCatalogEntry.clouds.map(\.id))
+        #expect(rows == Set(CloudTranscriptionProvider.allCases.map(\.rawValue)))
+        for entry in ModelCatalogEntry.clouds {
+            #expect(entry.provider == CloudTranscriptionProvider(rawValue: entry.id)?.name)
+        }
+    }
+
+    @Test("download sizes come from the repo tree: files only, MB or GB, nil when unusable")
+    func repoSizeLabels() {
+        func tree(_ sizes: [Int64]) -> Data {
+            let files = sizes.map { "{\"type\":\"file\",\"size\":\($0)}" }
+            return Data("[{\"type\":\"directory\",\"size\":0},\(files.joined(separator: ","))]".utf8)
+        }
+        #expect(ModelDownloadManager.sizeLabel(fromRepoTree: tree([600_000_000, 27_000_000])) == "627 MB")
+        #expect(ModelDownloadManager.sizeLabel(fromRepoTree: tree([1_530_000_000])) == "1.5 GB")
+        #expect(ModelDownloadManager.sizeLabel(fromRepoTree: tree([])) == nil)
+        #expect(ModelDownloadManager.sizeLabel(fromRepoTree: Data("not json".utf8)) == nil)
+    }
+
     @Test("model catalog ids are unique and stable across hardware tiers")
     func catalogIdsUnique() {
         let localIDs = ModelCatalogEntry.locals.map(\.id)
         #expect(Set(localIDs).count == localIDs.count)
-        #expect(localIDs == ["tiny", "small", "medium", "large-v3-v20240930_626MB"])
+        #expect(localIDs == ["tiny", "small", "medium", "large-v3-v20240930_626MB", LocalModelFamily.parakeetID, LocalModelFamily.nemotronID])
         let allIDs = ModelCatalogEntry.all.map(\.id)
         #expect(Set(allIDs).count == allIDs.count)
     }

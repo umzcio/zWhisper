@@ -1,9 +1,88 @@
+import FluidAudio
 import Foundation
 import WhisperKit
 
-/// Minimal M3 slice of architecture §3.8: downloads the pinned default model on
-/// first launch (idempotent — WhisperKit skips an existing download) with
-/// progress. The full catalog (filters, starring, 2-concurrent queue) is M6.
+/// One download progress sample: completion fraction plus bytes so far (for speed).
+struct DownloadUpdate: Sendable {
+    var fraction: Double
+    var bytes: Int64
+}
+
+/// Where FluidAudio keeps the NVIDIA models: its own default cache under
+/// Application Support/FluidAudio/Models. Vocabulary boosting reads the CTC
+/// tokenizer from that default location, so a custom root would break it.
+enum FluidModelStore {
+    static let parakeetVersion: AsrModelVersion = .ultra
+    static let nemotronSubdirectory = "multilingual/1120ms"
+
+    static var parakeetFolder: URL { AsrModels.defaultCacheDirectory(for: parakeetVersion) }
+    static var ctcFolder: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
+    static var nemotronRepoFolder: URL { MLModelConfigurationUtils.defaultModelsDirectory(for: .nemotronMultilingual) }
+    static var nemotronFolder: URL { nemotronRepoFolder.appendingPathComponent(nemotronSubdirectory, isDirectory: true) }
+
+    /// Approximate download sizes, for transfer speed (FluidAudio reports fractions).
+    static let parakeetBytes: Int64 = 632_000_000
+    static let ctcBytes: Int64 = 106_000_000
+    static let nemotronBytes: Int64 = 664_000_000
+
+    static var isParakeetInstalled: Bool {
+        AsrModels.modelsExist(at: parakeetFolder, version: parakeetVersion) && CtcModels.modelsExist(at: ctcFolder)
+    }
+
+    static var isNemotronInstalled: Bool {
+        let files = [
+            "metadata.json", "tokenizer.json",
+            "encoder.mlmodelc/weights/weight.bin", "decoder_joint.mlmodelc/weights/weight.bin",
+        ]
+        return files.allSatisfy {
+            FileManager.default.fileExists(atPath: nemotronFolder.appendingPathComponent($0).path(percentEncoded: false))
+        }
+    }
+
+    static func downloadParakeet(progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws {
+        let total = Double(parakeetBytes + ctcBytes)
+        let share = Double(parakeetBytes) / total
+        try await AsrModels.download(version: parakeetVersion) { update in
+            let fraction = update.fractionCompleted * share
+            progress(DownloadUpdate(fraction: fraction, bytes: Int64(fraction * total)))
+        }
+        try Task.checkCancellation()
+        // The CTC model behind custom-vocabulary boosting (no progress reporting).
+        try await CtcModels.download(variant: .ctc110m)
+        progress(DownloadUpdate(fraction: 1, bytes: Int64(total)))
+    }
+
+    static func downloadNemotron(progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws {
+        let total = Double(nemotronBytes)
+        try await ModelHub.download(
+            .nemotronMultilingual,
+            subdirectory: nemotronSubdirectory,
+            to: nemotronRepoFolder,
+            progressHandler: { update in
+                progress(DownloadUpdate(fraction: update.fractionCompleted, bytes: Int64(update.fractionCompleted * total)))
+            },
+            shouldSkip: { $0.contains(".mlpackage") }
+        )
+    }
+
+    /// Hugging Face tree listings whose files make up each download.
+    static func repoTreeURLs(for family: LocalModelFamily) -> [URL] {
+        switch family {
+        case .whisper:
+            return []
+        case .parakeet:
+            return [
+                URL(string: "https://huggingface.co/api/models/\(Repo.parakeetUltra.remotePath)/tree/main?recursive=true")!,
+                URL(string: "https://huggingface.co/api/models/\(Repo.parakeetCtc110m.remotePath)/tree/main?recursive=true")!,
+            ]
+        case .nemotron:
+            return [URL(string: "https://huggingface.co/api/models/\(Repo.nemotronMultilingual.remotePath)/tree/main/\(nemotronSubdirectory)?recursive=true")!]
+        }
+    }
+}
+
+/// Architecture §3.8: downloads, locates and deletes every local catalog row
+/// (WhisperKit variants and the FluidAudio NVIDIA models), with progress.
 struct ModelDownloadManager {
     /// §4 budget guidance: `large-v3-v20240930_626MB` on M2+/16GB, `small` on
     /// baseline M1/8GB.
@@ -15,19 +94,27 @@ struct ModelDownloadManager {
     }
 
     func ensureDefaultModel(progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
-        try await download(variant: Self.defaultModelName) { progress($0.fractionCompleted) }
+        try await download(variant: Self.defaultModelName) { progress($0.fraction) }
     }
 
-    /// Downloads any catalog variant (idempotent — WhisperKit skips an existing
-    /// download). token "" forces anonymous access: the repo is public, and a
-    /// stale user token in ~/.cache/huggingface/token otherwise fails with 401.
-    func download(variant: String, progress: @escaping @Sendable (Progress) -> Void) async throws -> URL {
-        Self.migrateLegacyModelFolderIfNeeded()
-        let folder = try await WhisperKit.download(variant: variant, downloadBase: Self.downloadBase, from: "argmaxinc/whisperkit-coreml", token: "") { download in
-            progress(download)
+    /// Downloads any local catalog row (idempotent: WhisperKit and FluidAudio
+    /// both skip files already on disk). For Whisper, token "" forces anonymous
+    /// access: the repo is public, and a stale user token in
+    /// ~/.cache/huggingface/token otherwise fails with 401.
+    func download(variant: String, progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws -> URL {
+        switch LocalModelFamily(id: variant) {
+        case .parakeet:
+            try await FluidModelStore.downloadParakeet(progress: progress)
+        case .nemotron:
+            try await FluidModelStore.downloadNemotron(progress: progress)
+        case .whisper:
+            Self.migrateLegacyModelFolderIfNeeded()
+            let folder = try await WhisperKit.download(variant: variant, downloadBase: Self.downloadBase, from: "argmaxinc/whisperkit-coreml", token: "") { download in
+                progress(DownloadUpdate(fraction: download.fractionCompleted, bytes: download.completedUnitCount))
+            }
+            try await ensureTokenizer(inModelFolder: folder, forVariant: variant)
         }
-        try await ensureTokenizer(inModelFolder: folder, forVariant: variant)
-        return folder
+        return Self.modelFolder(forVariant: variant)
     }
 
     /// WhisperKit's tokenizer download doesn't accept a token override (it
@@ -80,22 +167,83 @@ struct ModelDownloadManager {
         try? fm.moveItem(at: legacy, to: current)
     }
 
-    /// Local model folder for a variant (under downloadBase/models/…).
+    /// The variant's real download size from the model repo; nil on any failure,
+    /// which leaves the catalog's fallback label in place.
+    static func fetchSizeLabel(forVariant variant: String) async -> String? {
+        let family = LocalModelFamily(id: variant)
+        let urls = family == .whisper
+            ? [URL(string: "https://huggingface.co/api/models/argmaxinc/whisperkit-coreml/tree/main/openai_whisper-\(variant)?recursive=true")!]
+            : FluidModelStore.repoTreeURLs(for: family)
+        var total: Int64 = 0
+        for url in urls {
+            guard let (data, response) = try? await URLSession.shared.data(from: url),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let bytes = byteCount(fromRepoTree: data)
+            else { return nil }
+            total += bytes
+        }
+        return sizeLabel(bytes: total)
+    }
+
+    static func sizeLabel(fromRepoTree data: Data) -> String? {
+        byteCount(fromRepoTree: data).flatMap(sizeLabel(bytes:))
+    }
+
+    /// Compiled CoreML only: FluidAudio skips the repos' .mlpackage sources.
+    private static func byteCount(fromRepoTree data: Data) -> Int64? {
+        struct Node: Decodable {
+            let type: String
+            let path: String?
+            let size: Int64?
+        }
+        guard let nodes = try? JSONDecoder().decode([Node].self, from: data) else { return nil }
+        let bytes = nodes
+            .filter { $0.type == "file" && !($0.path ?? "").contains(".mlpackage") }
+            .reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+        return bytes > 0 ? bytes : nil
+    }
+
+    private static func sizeLabel(bytes: Int64) -> String? {
+        guard bytes > 0 else { return nil }
+        let mb = Double(bytes) / 1_000_000
+        return mb >= 1000 ? String(format: "%.1f GB", mb / 1000) : "\(Int(mb.rounded())) MB"
+    }
+
+    /// Local model folder for a catalog row (Whisper: under downloadBase/models/…).
     static func modelFolder(forVariant variant: String) -> URL {
-        downloadBase.appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-\(variant)", isDirectory: true)
+        switch LocalModelFamily(id: variant) {
+        case .parakeet: FluidModelStore.parakeetFolder
+        case .nemotron: FluidModelStore.nemotronFolder
+        case .whisper:
+            downloadBase.appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-\(variant)", isDirectory: true)
+        }
     }
 
     static func isDownloaded(variant: String) -> Bool {
-        migrateLegacyModelFolderIfNeeded()
-        return FileManager.default.fileExists(
-            atPath: modelFolder(forVariant: variant)
-                .appendingPathComponent("TextDecoder.mlmodelc").path(percentEncoded: false)
-        )
+        switch LocalModelFamily(id: variant) {
+        case .parakeet: return FluidModelStore.isParakeetInstalled
+        case .nemotron: return FluidModelStore.isNemotronInstalled
+        case .whisper:
+            migrateLegacyModelFolderIfNeeded()
+            return FileManager.default.fileExists(
+                atPath: modelFolder(forVariant: variant)
+                    .appendingPathComponent("TextDecoder.mlmodelc").path(percentEncoded: false)
+            )
+        }
     }
 
     static func delete(variant: String) throws {
-        migrateLegacyModelFolderIfNeeded()
-        try FileManager.default.removeItem(at: modelFolder(forVariant: variant))
+        let fm = FileManager.default
+        switch LocalModelFamily(id: variant) {
+        case .parakeet:
+            try fm.removeItem(at: FluidModelStore.parakeetFolder)
+            try? fm.removeItem(at: FluidModelStore.ctcFolder)
+        case .nemotron:
+            try fm.removeItem(at: FluidModelStore.nemotronFolder)
+        case .whisper:
+            migrateLegacyModelFolderIfNeeded()
+            try fm.removeItem(at: modelFolder(forVariant: variant))
+        }
     }
 
     private static var physicalMemoryGB: Int {
