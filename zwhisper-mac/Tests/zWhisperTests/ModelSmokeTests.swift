@@ -64,6 +64,8 @@ struct ModelSmokeTests {
     }
 
     @Test func whisper() async throws { try await run("large-v3-v20240930_626MB") }
+    @Test func whisperFull() async throws { try await run("large-v3-v20240930") }
+    @Test func whisperTurbo() async throws { try await run("large-v3-v20240930_turbo") }
     @Test func parakeet() async throws { try await run(LocalModelFamily.parakeetID) }
     @Test func nemotron() async throws { try await run(LocalModelFamily.nemotronID) }
 }

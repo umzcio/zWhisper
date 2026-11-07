@@ -27,6 +27,8 @@ WHISPER = {
     "small": "openai/whisper-small",
     "medium": "openai/whisper-medium",
     "large-v3-v20240930_626MB": "openai/whisper-large-v3",
+    "large-v3-v20240930": "openai/whisper-large-v3",
+    "large-v3-v20240930_turbo": "openai/whisper-large-v3",
 }
 MODELS = {}
 for variant, tokenizer_repo in WHISPER.items():

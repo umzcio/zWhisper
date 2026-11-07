@@ -17,7 +17,7 @@ struct ModelCatalogEntry: Equatable, Identifiable, Sendable {
     var priceHint: String?
 
     static let locals: [ModelCatalogEntry] = [
-        // §8 tier mapping: tiny≈Nano, small≈Fast, medium≈Pro, large-v3≈Ultra.
+        // §8 tier mapping: tiny≈Nano, small≈Fast, medium≈Pro, large-v3-turbo≈Ultra.
         // Ids are literal variant strings — keying a row off
         // ModelDownloadManager.defaultModelName would duplicate "small" on
         // baseline M1/<16GB hardware (the default there IS small).
@@ -26,7 +26,13 @@ struct ModelCatalogEntry: Equatable, Identifiable, Sendable {
         ModelCatalogEntry(id: "tiny", name: "Nano", engine: "Whisper Tiny", detail: "Fastest, good for short notes", sizeLabel: "77 MB", speedDots: 4, accuracyDots: 2, isCloud: false),
         ModelCatalogEntry(id: "small", name: "Fast", engine: "Whisper Small", detail: "Best balance", sizeLabel: "486 MB", speedDots: 3, accuracyDots: 3, isCloud: false),
         ModelCatalogEntry(id: "medium", name: "Pro", engine: "Whisper Medium", detail: "High accuracy, slower", sizeLabel: "1.5 GB", speedDots: 2, accuracyDots: 4, isCloud: false),
-        ModelCatalogEntry(id: "large-v3-v20240930_626MB", name: "Ultra", engine: "Whisper Large v3", detail: "Maximum accuracy, long dictations", sizeLabel: "627 MB", speedDots: 1, accuracyDots: 5, isCloud: false),
+        // The three Ultra rows are OpenAI's large-v3-turbo (v20240930) as
+        // Argmax builds it: compressed, full precision, and full precision
+        // with Argmax's faster decoder (an extra prefill stage). Argmax
+        // recommends the full build on M2 and later.
+        ModelCatalogEntry(id: "large-v3-v20240930_626MB", name: "Ultra", engine: "Whisper Large v3 Turbo, compressed", detail: "Maximum accuracy in a compact download", sizeLabel: "627 MB", speedDots: 1, accuracyDots: 5, isCloud: false),
+        ModelCatalogEntry(id: "large-v3-v20240930", name: "Ultra Full", engine: "Whisper Large v3 Turbo, full precision", detail: "Uncompressed, Argmax's pick for M2 and later", sizeLabel: "1.6 GB", speedDots: 1, accuracyDots: 5, isCloud: false, badge: "New"),
+        ModelCatalogEntry(id: "large-v3-v20240930_turbo", name: "Ultra Turbo", engine: "Whisper Large v3 Turbo, fast decoder", detail: "Uncompressed, with a faster decoder", sizeLabel: "1.6 GB", speedDots: 2, accuracyDots: 5, isCloud: false, badge: "New"),
         // NVIDIA models via FluidAudio (CoreML on the Neural Engine). Sizes
         // include Parakeet's 106 MB vocabulary-boosting model.
         ModelCatalogEntry(id: LocalModelFamily.parakeetID, name: "Parakeet", engine: "Parakeet TDT v3 Ultra", detail: "25 European languages, near-instant", sizeLabel: "738 MB", speedDots: 5, accuracyDots: 5, isCloud: false, badge: "New"),

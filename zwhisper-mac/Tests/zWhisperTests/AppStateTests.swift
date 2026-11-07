@@ -188,7 +188,7 @@ struct AppStateTests {
     func catalogIdsUnique() {
         let localIDs = ModelCatalogEntry.locals.map(\.id)
         #expect(Set(localIDs).count == localIDs.count)
-        #expect(localIDs == ["tiny", "small", "medium", "large-v3-v20240930_626MB", LocalModelFamily.parakeetID, LocalModelFamily.nemotronID])
+        #expect(localIDs == ["tiny", "small", "medium", "large-v3-v20240930_626MB", "large-v3-v20240930", "large-v3-v20240930_turbo", LocalModelFamily.parakeetID, LocalModelFamily.nemotronID])
         let allIDs = ModelCatalogEntry.all.map(\.id)
         #expect(Set(allIDs).count == allIDs.count)
     }
