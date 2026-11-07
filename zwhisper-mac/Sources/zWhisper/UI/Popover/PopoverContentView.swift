@@ -205,14 +205,18 @@ struct PopoverContentView: View {
                     .foregroundStyle(ZWColor.accentPurple)
             case .pasted:
                 StreamingText(text: appState.transcriptText, highlightLastWord: false)
-                // §3.1 pasted: green check + "Pasted to {app}", 11px/500 accent-green
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                    Text(appState.pasteSubtitle)
-                        .font(.system(size: 11, weight: .medium))
+                if appState.heldForReview != nil {
+                    heldCaption
+                } else {
+                    // §3.1 pasted: green check + "Pasted to {app}", 11px/500 accent-green
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(appState.pasteSubtitle)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(ZWColor.accentGreen)
                 }
-                .foregroundStyle(ZWColor.accentGreen)
             case .idle:
                 if let failure = appState.audioFailure {
                     hint(failure)
@@ -227,6 +231,9 @@ struct PopoverContentView: View {
                 } else if appState.modeProcessingFailed {
                     // §8/§10.4: actionable failure, never a spinner
                     hint("\(appState.failedModeName) mode needs Apple Intelligence or an OpenAI key.")
+                } else if appState.heldForReview != nil, !appState.transcriptText.isEmpty {
+                    StreamingText(text: appState.transcriptText, highlightLastWord: false)
+                    heldCaption
                 } else if !appState.transcriptText.isEmpty {
                     StreamingText(text: appState.transcriptText, highlightLastWord: false)
                 } else {
@@ -235,6 +242,21 @@ struct PopoverContentView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+    }
+
+    /// PasteGuard held the result on the clipboard: say so, and why. The text
+    /// stays secondary-colored (orange 11px text fails contrast in light mode).
+    private var heldCaption: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(ZWColor.accentOrange)
+                .accessibilityHidden(true)
+            Text(appState.pasteSubtitle)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ZWColor.text2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func hint(_ text: String) -> some View {

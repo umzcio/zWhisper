@@ -67,6 +67,9 @@ actor TranscriptionEngine: TranscriptionEngineProtocol {
     }
 
     func loadModel(_ id: String) async throws {
+        // Models downloaded by an older build are hashed once against the
+        // pins before their first load; a mismatch deletes them (ModelPins).
+        try ModelPins.verifyInstalled(id)
         let folder = ModelDownloadManager.modelFolder(forVariant: id)
         let onPartial: @Sendable (String) -> Void = { [partialContinuation] in partialContinuation.yield($0) }
         let next: any SpeechBackend = switch LocalModelFamily(id: id) {

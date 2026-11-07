@@ -23,6 +23,8 @@ actor ParakeetEngine: SpeechBackend {
 
     static func load(folder: URL, onPartial: @escaping @Sendable (String) -> Void) async throws -> ParakeetEngine {
         let models = try await AsrModels.load(from: folder, version: FluidModelStore.parakeetVersion)
+        // FluidAudio's load may tidy or refetch the cache: re-check after it.
+        try ModelPins.verifyInstalled(LocalModelFamily.parakeetID)
         let asr = AsrManager(config: .default)
         try await asr.loadModels(models)
         return ParakeetEngine(asr: asr, onPartial: onPartial)
@@ -46,7 +48,12 @@ actor ParakeetEngine: SpeechBackend {
         }
         do {
             if ctcModels == nil {
-                ctcModels = try await CtcModels.load(from: FluidModelStore.ctcFolder, variant: .ctc110m)
+                let loaded = try await CtcModels.load(from: FluidModelStore.ctcFolder, variant: .ctc110m)
+                // FluidAudio's load can tidy or refetch the cache (one-time
+                // adoption of pre-pin downloads), so re-check its files after:
+                // the vocabulary model is only used if it still matches its pins.
+                try ModelPins.verifyInstalled(LocalModelFamily.parakeetID)
+                ctcModels = loaded
             }
             guard let ctcModels, vocabularyWords == words else { return }
             let context = CustomVocabularyContext(terms: words.map { CustomVocabularyTerm(text: $0) })

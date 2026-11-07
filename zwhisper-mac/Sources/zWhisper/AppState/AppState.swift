@@ -133,6 +133,9 @@ final class AppState {
     private(set) var lastTranscript: Transcript?
     /// Subtitle for the pasted caption + result toast (§4.3).
     private(set) var pasteSubtitle = ""
+    /// Set when PasteGuard held a context-mode result on the clipboard
+    /// instead of pasting it: the popover stays open showing it, with why.
+    private(set) var heldForReview: PasteGuard.Reason?
 
     // MARK: Modes (M5–M6)
 
@@ -257,10 +260,19 @@ final class AppState {
             if let activeID = modelPreferences.activeLocalID,
                ModelDownloadManager.isDownloaded(variant: activeID)
             {
-                if activeCloudProvider == nil {
+                do {
                     try await transcription.loadModel(activeID)
-                } else {
-                    try? await transcription.loadModel(activeID)
+                } catch let error as ModelIntegrityError {
+                    // The files failed their hash check and were deleted:
+                    // start over like a fresh install (pinned download).
+                    Self.logToStderr("model integrity check failed (\(activeID)): \(error)")
+                    if activeCloudProvider == nil {
+                        try await transcription.load { [weak self] fraction in
+                            Task { @MainActor in self?.modelStatus = .downloading(fraction) }
+                        }
+                    }
+                } catch where activeCloudProvider != nil {
+                    // Cloud transcribes; the local model is only the preview.
                 }
             } else if activeCloudProvider != nil {
                 // Cloud needs no download; a model already on disk still gives
@@ -489,6 +501,8 @@ final class AppState {
                 Self.logToStderr("active model: \(id)")
             } catch {
                 Self.logToStderr("setActiveModel failed (\(id)): \(error)")
+                // Failed its hash check and was deleted: show it as not downloaded.
+                if error is ModelIntegrityError { modelStates[id] = ModelDownloadManager.isDownloaded(variant: id) ? .downloaded : .none }
             }
         }
     }
@@ -888,6 +902,7 @@ final class AppState {
             partialText = ""
             transcriptText = ""
             processedText = ""
+            heldForReview = nil
             transcriptionFailed = false
             modeProcessingFailed = false
             contextCaptured = false
@@ -1010,15 +1025,29 @@ final class AppState {
             return
         }
         phase = .pasting
+        // Screen context is untrusted: a result that looks steered by it is
+        // put on the clipboard for the user to read, never typed for them.
+        let held = PasteGuard.holdReason(
+            output: processed,
+            raw: raw,
+            mode: mode,
+            context: capturedContext,
+            personalContext: settings.personalContext,
+            targetBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        )
+        heldForReview = held
         var receipt: PasteReceipt?
-        if settings.autoPaste {
+        if settings.autoPaste, held == nil {
             receipt = try? await paste.paste(text: processed, restoreClipboard: settings.restoreClipboard)
         } else {
             await paste.copy(text: processed)
         }
         lastPasteReceipt = receipt
 
-        if let receipt, receipt.didPaste {
+        if let held {
+            Self.logToStderr("paste held for review: \(held)")
+            pasteSubtitle = "Not pasted: \(held.message). Check it, then press ⌘V"
+        } else if let receipt, receipt.didPaste {
             pasteSubtitle = receipt.targetApp.isEmpty ? "Pasted" : "Pasted to \(receipt.targetApp)"
         } else if settings.autoPaste, receipt != nil {
             pasteSubtitle = "Press ⌘V to paste" // AX degraded path (§8)
@@ -1078,6 +1107,14 @@ final class AppState {
             try? await Task.sleep(for: .milliseconds(700))
             guard let self, case .pasted = self.phase else { return }
             self.phase = .idle
+            // A held result stays on screen until the user has read it. The
+            // docked indicator still collapses (it claims Esc/⌘-digits while
+            // open), but only after the toast's 6s, with the text on show.
+            if self.heldForReview != nil {
+                guard self.isDocked else { return }
+                try? await Task.sleep(for: .seconds(6))
+                guard case .idle = self.phase, self.heldForReview != nil else { return }
+            }
             // §6.6 "Always close window after dictation"; the docked indicator
             // always collapses (otherwise Esc/⌘-digits would stay claimed at idle).
             if self.settings.alwaysCloseWindowAfterDictation || self.isDocked {
@@ -1277,6 +1314,7 @@ final class AppState {
         // Dismiss clears the teleprompter — a stale transcript must not greet
         // the next summon (results live in History).
         transcriptText = ""
+        heldForReview = nil
         partialText = ""
         processedText = ""
         if isDocked {

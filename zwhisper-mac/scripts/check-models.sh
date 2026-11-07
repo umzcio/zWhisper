@@ -13,6 +13,7 @@ export CATALOG="${CATALOG_FILE:-$ROOT/Sources/zWhisper/Models/ModelCatalog.swift
 export KNOWN="${KNOWN_MODELS_FILE:-$ROOT/scripts/known-models.json}"
 export RESOLVED="$ROOT/zWhisper.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 export CLOUD_BACKEND="$ROOT/Sources/zWhisper/Modes/CloudLLMBackend.swift"
+export PINS="${PINS_FILE:-$ROOT/Sources/zWhisper/Models/model-pins.json}"
 export UPDATE="${1:-}"
 export LATEST_WHISPERKIT
 LATEST_WHISPERKIT="$(gh release view --repo argmaxinc/argmax-oss-swift --json tagName --jq .tagName 2>/dev/null || true)"
@@ -75,6 +76,35 @@ for name, tree in FLUID_TREES.items():
     except Exception as error:
         warnings.append(f"couldn't check {name} upstream ({error})")
 
+# Integrity pins (model-pins.json, from scripts/pin-models.sh): every local row
+# must be pinned, and every pinned commit must still resolve upstream, or its
+# download fails. Upstream moving past a pin is only a prompt to review.
+model_pins = json.load(open(os.environ["PINS"]))["models"]
+all_ids = re.findall(r'id: (?:"([^"]+)"|LocalModelFamily\.(\w+)ID)', locals_block)
+for literal, family in all_ids:
+    model = literal or {"parakeet": "parakeet-tdt-v3", "nemotron": "nemotron-3.5-streaming"}[family]
+    if model not in model_pins:
+        missing.append(f"{model} (no integrity pin; run scripts/pin-models.sh)")
+heads = {}
+for parts in model_pins.values():
+    for part in parts:
+        repo, sha = part["repo"], part["revision"]
+        if repo in heads:
+            continue
+        try:
+            fetch(f"https://huggingface.co/api/models/{repo}/revision/{sha}")
+            heads[repo] = fetch(f"https://huggingface.co/api/models/{repo}/revision/main")["sha"]
+        except urllib.error.HTTPError:
+            missing.append(f"{repo}@{sha[:10]} (pinned commit gone upstream)")
+            heads[repo] = sha
+            continue
+        except Exception as error:
+            warnings.append(f"couldn't check the pin for {repo} ({error})")
+            heads[repo] = sha
+            continue
+        if heads[repo] != sha:
+            warnings.append(f"{repo} has commits past its pin; review with scripts/pin-models.sh")
+
 try:
     pins = json.load(open(os.environ["RESOLVED"]))["pins"]
 except (OSError, KeyError):
@@ -99,7 +129,7 @@ print(f"Check by hand: {rewrite_model} (rewrites) and gpt-transcribe at https://
 print("Check by hand: whisper-large-v3 at https://console.groq.com/docs/speech-to-text, nova-3 at https://deepgram.com/pricing")
 
 if missing:
-    print(f"error: catalog models no longer upstream: {', '.join(missing)}", file=sys.stderr)
+    print(f"error: catalog models that would fail to download: {', '.join(missing)}", file=sys.stderr)
     sys.exit(1)
 print(f"Catalog OK: {len(ids) + len(FLUID_TREES)} model downloads available upstream, {len(warnings)} warning(s).")
 PY

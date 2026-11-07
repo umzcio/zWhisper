@@ -40,6 +40,7 @@ enum FluidModelStore {
     }
 
     static func downloadParakeet(progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws {
+        ModelPins.installFluidRevisions
         let total = Double(parakeetBytes + ctcBytes)
         let share = Double(parakeetBytes) / total
         try await AsrModels.download(version: parakeetVersion) { update in
@@ -53,6 +54,7 @@ enum FluidModelStore {
     }
 
     static func downloadNemotron(progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws {
+        ModelPins.installFluidRevisions
         let total = Double(nemotronBytes)
         try await ModelHub.download(
             .nemotronMultilingual,
@@ -97,10 +99,14 @@ struct ModelDownloadManager {
         try await download(variant: Self.defaultModelName) { progress($0.fraction) }
     }
 
-    /// Downloads any local catalog row (idempotent: WhisperKit and FluidAudio
-    /// both skip files already on disk). For Whisper, token "" forces anonymous
-    /// access: the repo is public, and a stale user token in
-    /// ~/.cache/huggingface/token otherwise fails with 401.
+    static let whisperRepo = "argmaxinc/whisperkit-coreml"
+
+    /// Downloads any local catalog row from its pinned commit, then checks
+    /// every file against the hashes in model-pins.json (ModelPins); a model
+    /// that doesn't match is deleted and never loaded. Idempotent: WhisperKit's
+    /// hub client and FluidAudio both skip files already on disk. For Whisper,
+    /// token "" forces anonymous access: the repo is public, and a stale user
+    /// token in ~/.cache/huggingface/token otherwise fails with 401.
     func download(variant: String, progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws -> URL {
         switch LocalModelFamily(id: variant) {
         case .parakeet:
@@ -109,25 +115,30 @@ struct ModelDownloadManager {
             try await FluidModelStore.downloadNemotron(progress: progress)
         case .whisper:
             Self.migrateLegacyModelFolderIfNeeded()
-            let folder = try await WhisperKit.download(variant: variant, downloadBase: Self.downloadBase, from: "argmaxinc/whisperkit-coreml", token: "") { download in
+            let pin = try ModelPins.pin(for: variant, repo: Self.whisperRepo)
+            let hub = HubApiWrapper(downloadBase: Self.downloadBase, hfToken: "", endpoint: Constants.defaultRemoteEndpoint)
+            _ = try await hub.snapshot(from: HubApiWrapper.Repo(id: Self.whisperRepo), revision: pin.revision, matching: ["\(pin.prefix)*"]) { download in
                 progress(DownloadUpdate(fraction: download.fractionCompleted, bytes: download.completedUnitCount))
             }
-            try await ensureTokenizer(inModelFolder: folder, forVariant: variant)
+            try await ensureTokenizer(inModelFolder: Self.modelFolder(forVariant: variant), forVariant: variant)
         }
+        try Task.checkCancellation()
+        try ModelPins.verifyDownload(variant)
         return Self.modelFolder(forVariant: variant)
     }
 
     /// WhisperKit's tokenizer download doesn't accept a token override (it
     /// reads ~/.cache/huggingface/token), so fetch the tokenizer files
     /// anonymously into the model folder — its local search finds them there
-    /// and never touches the hub.
+    /// and never touches the hub. Fetched from the pinned commit only.
     private func ensureTokenizer(inModelFolder folder: URL, forVariant variant: String) async throws {
         let files = ["tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "special_tokens_map.json"]
         let repo = Self.tokenizerRepoName(forVariant: variant)
+        let revision = try ModelPins.pin(for: variant, repo: repo).revision
         for file in files {
             let destination = folder.appendingPathComponent(file)
             guard !FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) else { continue }
-            let url = URL(string: "https://huggingface.co/\(repo)/resolve/main/\(file)")!
+            let url = URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")!
             let (data, response) = try await URLSession.shared.data(from: url)
             // tokenizer.json is required; the rest are best-effort config files.
             if let http = response as? HTTPURLResponse, http.statusCode == 200 {
@@ -138,7 +149,7 @@ struct ModelDownloadManager {
         }
     }
 
-    private static func tokenizerRepoName(forVariant variant: String) -> String {
+    static func tokenizerRepoName(forVariant variant: String) -> String {
         if variant.hasPrefix("tiny") { return "openai/whisper-tiny" }
         if variant.hasPrefix("small") { return "openai/whisper-small" }
         if variant.hasPrefix("medium") { return "openai/whisper-medium" }
