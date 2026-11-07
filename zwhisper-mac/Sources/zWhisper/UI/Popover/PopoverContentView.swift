@@ -42,14 +42,21 @@ struct PopoverContentView: View {
 
             VStack(spacing: 0) {
                 topRow
-                WaveformView(appState: appState, barCount: isMain ? 48 : 28)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.vertical, 8)
-                if isMain {
-                    teleprompter
-                }
-                if isMain || isRecording || isBusy {
-                    bottomRow
+                if let review = appState.pendingReview, appState.phase == .reviewing {
+                    // Review layout in every size: the whole result, then Paste/Discard.
+                    ReviewPanel(review: review)
+                        .padding(.top, 10)
+                    reviewBar
+                } else {
+                    WaveformView(appState: appState, barCount: isMain ? 48 : 28)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.vertical, 8)
+                    if isMain {
+                        teleprompter
+                    }
+                    if isMain || isRecording || isBusy {
+                        bottomRow
+                    }
                 }
             }
             .padding(12)
@@ -204,8 +211,7 @@ struct PopoverContentView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ZWColor.accentPurple)
             case .reviewing:
-                StreamingText(text: appState.transcriptText, highlightLastWord: false)
-                reviewBar
+                EmptyView() // drawn by ReviewPanel in place of the waveform and teleprompter
             case .pasted:
                 StreamingText(text: appState.transcriptText, highlightLastWord: false)
                 // §3.1 pasted: green check + "Pasted to {app}", 11px/500 accent-green
@@ -244,6 +250,9 @@ struct PopoverContentView: View {
     /// typed only on Return (or the button); Esc discards it.
     private var reviewBar: some View {
         let target = appState.pendingReview?.targetApp ?? ""
+        let sent = appState.pendingReview?.sent ?? .init()
+        let source = sent.selection && sent.clipboard ? "selection + clipboard"
+            : sent.clipboard ? "clipboard" : "selection"
         return HStack(spacing: 12) {
             Button {
                 appState.confirmReview()
@@ -253,6 +262,7 @@ struct PopoverContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            .fixedSize()
             .help("Press Return to paste")
             Button {
                 appState.cancel()
@@ -264,12 +274,12 @@ struct PopoverContentView: View {
             .foregroundStyle(ZWColor.text2)
             .help("Press \(CancelShortcut.current.displayText) to discard")
             Spacer(minLength: 0)
-            Text("Uses text from your screen")
+            Text("Used your \(source)")
                 .font(.system(size: 10))
                 .foregroundStyle(ZWColor.text2)
                 .lineLimit(1)
         }
-        .padding(.top, 4)
+        .padding(.top, 8)
     }
 
     private func hint(_ text: String) -> some View {
@@ -433,6 +443,60 @@ private struct StreamingText: View {
             }
         }
         return attributed
+    }
+}
+
+/// Review before paste: every line Return would type, numbered, wrapped and
+/// scrollable, with invisible characters drawn as markers. A result of more
+/// than one line is called out, since each line break acts as Return in a
+/// shell.
+private struct ReviewPanel: View {
+    let review: PendingReview
+
+    var body: some View {
+        let lines = PasteGuard.reviewLines(review.processed)
+        let multiline = lines.count > 1
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: multiline ? "exclamationmark.triangle.fill" : "eye")
+                Text(summary(lines: lines.count))
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(multiline ? ZWColor.accentOrange : ZWColor.text2)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            if multiline {
+                                Text("\(index + 1)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(ZWColor.text3)
+                                    .frame(minWidth: 18, alignment: .trailing)
+                            }
+                            Text(line.isEmpty ? " " : line)
+                                .font(.system(size: 13))
+                                .foregroundStyle(ZWColor.text1)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .textSelection(.enabled)
+                .padding(8)
+            }
+            .scrollIndicators(.visible)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ZWColor.surface2.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private func summary(lines: Int) -> String {
+        let characters = review.processed.count
+        if lines > 1 {
+            return "Return types all \(lines) lines (\(characters) characters). Check each one."
+        }
+        return "Return types this (\(characters) characters)."
     }
 }
 

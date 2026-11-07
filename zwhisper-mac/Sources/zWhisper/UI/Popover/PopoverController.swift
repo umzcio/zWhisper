@@ -9,6 +9,8 @@ final class PopoverController {
     /// §3.1 sizes: Main 420×240, Mini 220×64.
     static let mainSize = NSSize(width: 420, height: 240)
     static let miniSize = NSSize(width: 220, height: 64)
+    /// Review before paste, in every size and placement.
+    static let reviewSize = NSSize(width: 420, height: 360)
     /// Docked indicator states: rest pill / expanded recording pill.
     static let dockedRestSize = NSSize(width: 104, height: 44)
     static let dockedActiveSize = NSSize(width: 320, height: 48)
@@ -98,7 +100,15 @@ final class PopoverController {
 
     /// Animated Main ↔ Mini frame change (§3.1), anchored per placement.
     func animateFrame(to size: AppState.PopoverSize) {
-        let newSize = size == .main ? Self.mainSize : Self.miniSize
+        animateFrame(toSize: size == .main ? Self.mainSize : Self.miniSize)
+    }
+
+    /// Review before paste: tall enough to show a multi-line result in full.
+    func animateReviewFrame() {
+        animateFrame(toSize: Self.reviewSize)
+    }
+
+    private func animateFrame(toSize newSize: NSSize) {
         let old = panel.frame
         guard old.size != newSize else { return }
         let origin: NSPoint

@@ -258,6 +258,22 @@ struct ModeFlowTests {
         #expect(state.history.first?.processedText == processor.chunks.last)
     }
 
+    @Test("the review can't be shrunk to Mini; the user's size returns afterwards")
+    func reviewKeepsFullLayout() async throws {
+        let (state, _, _, _, _) = await makeState(context: thread)
+        state.togglePopoverSize()
+        #expect(state.popoverSize == .mini)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(state.phase == .reviewing)
+        state.togglePopoverSize()
+        #expect(state.popoverSize == .mini) // unchanged: the toggle is ignored mid-review
+        #expect(state.pendingReview?.sent == .init(selection: true, clipboard: false))
+        state.cancel()
+        state.togglePopoverSize()
+        #expect(state.popoverSize == .main)
+    }
+
     @Test("Esc discards: nothing pasted, result kept in History")
     func reviewDiscard() async throws {
         let (state, _, _, processor, paste) = await makeState(context: thread)

