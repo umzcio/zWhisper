@@ -76,8 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleRecording: { appState.toggleDictation() },
             onCancel: { appState.cancel() },
             onCycleMode: { appState.cycleMode() },
-            onModeDigit: { appState.switchMode(shortcutIndex: $0) }
+            onModeDigit: { appState.switchMode(shortcutIndex: $0) },
+            onConfirmReview: { appState.confirmReview() },
+            onReviewInterrupted: { appState.discardReview(dismiss: true) }
         )
+        appState.setReviewKeysEnabled = { [hotkeyManager] enabled in
+            hotkeyManager.setReviewKeysEnabled(enabled)
+        }
         hotkeyManager.setUpPushToTalk(
             onStart: { appState.startPushToTalk() },
             onStop: { appState.stopPushToTalk() }

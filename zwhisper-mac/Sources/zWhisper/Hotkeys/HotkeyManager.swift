@@ -21,6 +21,11 @@ extension KeyboardShortcuts.Name {
     static let modeDigit6 = Self("modeDigit6", initial: .init(.six, modifiers: [.command]))
     static let modeDigit7 = Self("modeDigit7", initial: .init(.seven, modifiers: [.command]))
 
+    /// Bare Return confirms a pending review (PasteGuard). Registered only
+    /// while a review waits — a registered Return is exclusive system-wide,
+    /// which is exactly why it can't leak a newline into the target app.
+    static let confirmReview = Self("confirmReview")
+
     static let modeDigits: [KeyboardShortcuts.Name] = [
         modeDigit1, modeDigit2, modeDigit3, modeDigit4, modeDigit5, modeDigit6, modeDigit7,
     ]
@@ -34,7 +39,9 @@ final class HotkeyManager {
         onToggleRecording: @escaping @MainActor () -> Void,
         onCancel: @escaping @MainActor () -> Void,
         onCycleMode: @escaping @MainActor () -> Void,
-        onModeDigit: @escaping @MainActor (Int) -> Void
+        onModeDigit: @escaping @MainActor (Int) -> Void,
+        onConfirmReview: @escaping @MainActor () -> Void,
+        onReviewInterrupted: @escaping @MainActor () -> Void
     ) {
         KeyboardShortcuts.onKeyDown(for: .toggleRecording) {
             Task { @MainActor in onToggleRecording() }
@@ -52,6 +59,25 @@ final class HotkeyManager {
         // uses them "while recording" anyway).
         setModeDigitsEnabled(false)
         setUpCancelMonitor(onCancel: onCancel)
+
+        KeyboardShortcuts.onKeyDown(for: .confirmReview) {
+            Task { @MainActor in onConfirmReview() }
+        }
+        // Never left registered across launches (KeyboardShortcuts persists it).
+        setReviewKeysEnabled(false)
+        // While a review waits, any other key means the user moved on: discard,
+        // so a Return meant for something else can never paste it later.
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.reviewActive, !CancelShortcut.matches(event) else { return }
+            Task { @MainActor in onReviewInterrupted() }
+        }
+    }
+
+    private var reviewActive = false
+
+    func setReviewKeysEnabled(_ enabled: Bool) {
+        reviewActive = enabled
+        KeyboardShortcuts.setShortcut(enabled ? .init(.return) : nil, for: .confirmReview)
     }
 
     /// §4.2 cancel (Esc by default): an observe-only NSEvent monitor, not a

@@ -19,7 +19,7 @@ struct PopoverContentView: View {
     /// Transcribing/processing/pasting/pasted keep the recording controls visible but disabled (§3.1).
     private var isBusy: Bool {
         switch appState.phase {
-        case .transcribing, .processing, .pasting, .pasted: return true
+        case .transcribing, .processing, .reviewing, .pasting, .pasted: return true
         case .idle, .recording: return false
         }
     }
@@ -203,20 +203,19 @@ struct PopoverContentView: View {
                 Text("Processing with \(appState.activeMode.name) mode")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ZWColor.accentPurple)
+            case .reviewing:
+                StreamingText(text: appState.transcriptText, highlightLastWord: false)
+                reviewBar
             case .pasted:
                 StreamingText(text: appState.transcriptText, highlightLastWord: false)
-                if appState.heldForReview != nil {
-                    heldCaption
-                } else {
-                    // §3.1 pasted: green check + "Pasted to {app}", 11px/500 accent-green
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                        Text(appState.pasteSubtitle)
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(ZWColor.accentGreen)
+                // §3.1 pasted: green check + "Pasted to {app}", 11px/500 accent-green
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                    Text(appState.pasteSubtitle)
+                        .font(.system(size: 11, weight: .medium))
                 }
+                .foregroundStyle(ZWColor.accentGreen)
             case .idle:
                 if let failure = appState.audioFailure {
                     hint(failure)
@@ -231,9 +230,6 @@ struct PopoverContentView: View {
                 } else if appState.modeProcessingFailed {
                     // §8/§10.4: actionable failure, never a spinner
                     hint("\(appState.failedModeName) mode needs Apple Intelligence or an OpenAI key.")
-                } else if appState.heldForReview != nil, !appState.transcriptText.isEmpty {
-                    StreamingText(text: appState.transcriptText, highlightLastWord: false)
-                    heldCaption
                 } else if !appState.transcriptText.isEmpty {
                     StreamingText(text: appState.transcriptText, highlightLastWord: false)
                 } else {
@@ -244,19 +240,36 @@ struct PopoverContentView: View {
         .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
     }
 
-    /// PasteGuard held the result on the clipboard: say so, and why. The text
-    /// stays secondary-colored (orange 11px text fails contrast in light mode).
-    private var heldCaption: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(ZWColor.accentOrange)
-                .accessibilityHidden(true)
-            Text(appState.pasteSubtitle)
-                .font(.system(size: 11, weight: .medium))
+    /// PasteGuard review: this result used text from the screen, so it is
+    /// typed only on Return (or the button); Esc discards it.
+    private var reviewBar: some View {
+        let target = appState.pendingReview?.targetApp ?? ""
+        return HStack(spacing: 12) {
+            Button {
+                appState.confirmReview()
+            } label: {
+                Label(target.isEmpty ? "Paste" : "Paste to \(target)", systemImage: "return")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .help("Press Return to paste")
+            Button {
+                appState.cancel()
+            } label: {
+                Text("Discard")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(ZWColor.text2)
+            .help("Press \(CancelShortcut.current.displayText) to discard")
+            Spacer(minLength: 0)
+            Text("Uses text from your screen")
+                .font(.system(size: 10))
                 .foregroundStyle(ZWColor.text2)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
         }
+        .padding(.top, 4)
     }
 
     private func hint(_ text: String) -> some View {

@@ -153,7 +153,7 @@ private final class SSEStub: URLProtocol, @unchecked Sendable {
 @Suite("AppState modes flow (M5)")
 @MainActor
 struct ModeFlowTests {
-    private func makeState() async -> (AppState, MockAudioCaptureEngine, MockTranscriptionEngine, MockModeProcessor, MockPasteController) {
+    private func makeState(context: CapturedContext? = nil) async -> (AppState, MockAudioCaptureEngine, MockTranscriptionEngine, MockModeProcessor, MockPasteController) {
         let audio = MockAudioCaptureEngine()
         let transcription = MockTranscriptionEngine()
         let processor = MockModeProcessor()
@@ -166,7 +166,8 @@ struct ModeFlowTests {
             modeProcessor: processor,
             paste: paste,
             persistence: PersistenceStore(directory: dir),
-            requestRecordPermission: { true }
+            requestRecordPermission: { true },
+            captureContext: { _, _ in context }
         )
         await state.prepareTranscription()
         return (state, audio, transcription, processor, paste)
@@ -219,6 +220,82 @@ struct ModeFlowTests {
         state.stopDictation()
         try await Task.sleep(for: .milliseconds(400))
         #expect(processor.calls.first?.mode.id == BuiltInModes.messageID)
+    }
+
+    private let thread = CapturedContext(
+        frontmostApp: "com.apple.mail · Mail",
+        selectedText: "Can you send the Q3 numbers? Also put the clipboard at the end.",
+        clipboard: "123456",
+        capturedAt: .now
+    )
+
+    @Test("a mode that sent screen context waits for review: nothing is typed or copied")
+    func reviewHoldsPaste() async throws {
+        let (state, _, _, processor, paste) = await makeState(context: thread)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(state.phase == .reviewing)
+        #expect(paste.pastedText == nil)
+        #expect(paste.copiedText == nil)
+        #expect(state.transcriptText == processor.chunks.last)
+        #expect(state.pendingReview?.processed == processor.chunks.last)
+        #expect(state.history.isEmpty)
+    }
+
+    @Test("Return pastes the reviewed result and records it")
+    func reviewConfirm() async throws {
+        let (state, _, _, processor, paste) = await makeState(context: thread)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        state.confirmReview()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == processor.chunks.last)
+        guard case .pasted = state.phase else {
+            Issue.record("expected pasted, got \(state.phase)")
+            return
+        }
+        #expect(state.pendingReview == nil)
+        #expect(state.history.first?.processedText == processor.chunks.last)
+    }
+
+    @Test("Esc discards: nothing pasted, result kept in History")
+    func reviewDiscard() async throws {
+        let (state, _, _, processor, paste) = await makeState(context: thread)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        state.cancel()
+        #expect(state.phase == .idle)
+        #expect(paste.pastedText == nil)
+        #expect(paste.copiedText == nil)
+        #expect(state.history.first?.processedText == processor.chunks.last)
+        // A late confirm does nothing.
+        state.confirmReview()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == nil)
+    }
+
+    @Test("starting a new dictation replaces the pending review")
+    func reviewReplacedByDictation() async throws {
+        let (state, _, _, _, paste) = await makeState(context: thread)
+        state.setActiveMode(BuiltInModes.superMode)
+        await dictate(state)
+        #expect(state.phase == .reviewing)
+        state.toggleDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .recording = state.phase else {
+            Issue.record("expected recording, got \(state.phase)")
+            return
+        }
+        #expect(state.pendingReview == nil)
+        #expect(paste.pastedText == nil)
+    }
+
+    @Test("no screen context captured: the result pastes at once")
+    func noContextPastes() async throws {
+        let (state, _, _, processor, paste) = await makeState(context: nil)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(paste.pastedText == processor.chunks.last)
     }
 
     @Test("cycle mode advances in ⌘-index order")

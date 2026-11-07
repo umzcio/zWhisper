@@ -11,9 +11,23 @@ enum DictationPhase: Equatable {
     case recording(startedAt: Date)
     case transcribing
     case processing
+    /// A mode that read screen context finished: the result waits in the
+    /// popover until Return pastes it or Esc discards it (PasteGuard).
+    case reviewing
     case pasting
     /// Auto-dismisses 700ms after appearing (§4.3).
     case pasted(appName: String)
+}
+
+/// A context-mode result waiting for the user's go-ahead (PasteGuard).
+struct PendingReview: Equatable {
+    let raw: String
+    let processed: String
+    let mode: Mode
+    let reprocess: Bool
+    /// The app the result would go to; switching away discards the review.
+    let targetPID: pid_t?
+    let targetApp: String
 }
 
 /// Speech-model readiness; gates dictation and drives the popover hint.
@@ -133,9 +147,12 @@ final class AppState {
     private(set) var lastTranscript: Transcript?
     /// Subtitle for the pasted caption + result toast (§4.3).
     private(set) var pasteSubtitle = ""
-    /// Set when PasteGuard held a context-mode result on the clipboard
-    /// instead of pasting it: the popover stays open showing it, with why.
-    private(set) var heldForReview: PasteGuard.Reason?
+    /// The result awaiting Return/Esc while phase is `.reviewing`.
+    private(set) var pendingReview: PendingReview?
+    /// Claims bare Return (exclusively) while a review is pending, and arms
+    /// the any-other-key discard; HotkeyManager implements both.
+    var setReviewKeysEnabled: ((Bool) -> Void)?
+    private var reviewAppObserver: NSObjectProtocol?
 
     // MARK: Modes (M5–M6)
 
@@ -200,6 +217,7 @@ final class AppState {
     /// True between a start trigger and `phase = .recording`; closes the
     /// double-start window while permission/engine awaits are in flight.
     private let cloudAPIKey: @Sendable (String) -> String?
+    private let captureContext: @Sendable (Bool, Bool) async -> CapturedContext?
     private let makeCloudTranscriber: @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing
     private var startInFlight = false
     private var metering = false
@@ -218,6 +236,9 @@ final class AppState {
         persistence: PersistenceStore = PersistenceStore(),
         requestRecordPermission: @escaping @Sendable () async -> Bool = AppState.requestSystemRecordPermission,
         cloudAPIKey: @escaping @Sendable (String) -> String? = { KeychainStore.apiKey(for: $0) },
+        captureContext: @escaping @Sendable (_ selection: Bool, _ clipboard: Bool) async -> CapturedContext? = {
+            await ContextCapture.capture(readSelectedText: $0, readClipboard: $1)
+        },
         makeCloudTranscriber: @escaping @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing = {
             CloudTranscriber(provider: $0, apiKey: $1, server: $2)
         }
@@ -229,6 +250,7 @@ final class AppState {
         self.persistence = persistence
         self.requestRecordPermission = requestRecordPermission
         self.cloudAPIKey = cloudAPIKey
+        self.captureContext = captureContext
         self.makeCloudTranscriber = makeCloudTranscriber
     }
 
@@ -816,6 +838,10 @@ final class AppState {
         switch phase {
         case .idle: startDictation()
         case .recording: stopDictation()
+        case .reviewing:
+            // A new dictation replaces the one waiting for review.
+            discardReview()
+            startDictation()
         case .transcribing, .processing, .pasting, .pasted: break
         }
     }
@@ -823,6 +849,7 @@ final class AppState {
     /// §4.1 push-to-talk: key down (not repeat, no modifiers) starts; key up
     /// stops + pastes. Right ⌘ is the default hold key.
     func startPushToTalk() {
+        if case .reviewing = phase { discardReview() }
         guard case .idle = phase, !holdToTalkActive else {
             Self.logToStderr("ptt start ignored (phase: \(phase), holdToTalkActive: \(holdToTalkActive))")
             return
@@ -902,7 +929,6 @@ final class AppState {
             partialText = ""
             transcriptText = ""
             processedText = ""
-            heldForReview = nil
             transcriptionFailed = false
             modeProcessingFailed = false
             contextCaptured = false
@@ -923,10 +949,7 @@ final class AppState {
         let mode = activeMode
         guard mode.readsSelectedText || mode.readsClipboard else { return }
         Task { @MainActor in
-            let context = await ContextCapture.capture(
-                readSelectedText: mode.readsSelectedText,
-                readClipboard: mode.readsClipboard
-            )
+            let context = await captureContext(mode.readsSelectedText, mode.readsClipboard)
             guard case .recording = phase else { return }
             capturedContext = context
             contextCaptured = context != nil
@@ -1024,30 +1047,33 @@ final class AppState {
             dismissPopover()
             return
         }
+        // Screen context is untrusted: when a mode sent the selection or the
+        // clipboard to the model, nothing is typed until the user has read
+        // the result and pressed Return (PasteGuard).
+        if PasteGuard.requiresReview(mode: mode, context: capturedContext) {
+            beginReview(PendingReview(
+                raw: raw, processed: processed, mode: mode, reprocess: reprocess,
+                targetPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                targetApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+            ))
+            return
+        }
+        await deliver(raw: raw, processed: processed, mode: mode, reprocess: reprocess)
+    }
+
+    /// Paste (or copy), history, toast, auto-close: the end of every dictation
+    /// that isn't discarded.
+    private func deliver(raw: String, processed: String, mode: Mode, reprocess: Bool) async {
         phase = .pasting
-        // Screen context is untrusted: a result that looks steered by it is
-        // put on the clipboard for the user to read, never typed for them.
-        let held = PasteGuard.holdReason(
-            output: processed,
-            raw: raw,
-            mode: mode,
-            context: capturedContext,
-            personalContext: settings.personalContext,
-            targetBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        )
-        heldForReview = held
         var receipt: PasteReceipt?
-        if settings.autoPaste, held == nil {
+        if settings.autoPaste {
             receipt = try? await paste.paste(text: processed, restoreClipboard: settings.restoreClipboard)
         } else {
             await paste.copy(text: processed)
         }
         lastPasteReceipt = receipt
 
-        if let held {
-            Self.logToStderr("paste held for review: \(held)")
-            pasteSubtitle = "Not pasted: \(held.message). Check it, then press ⌘V"
-        } else if let receipt, receipt.didPaste {
+        if let receipt, receipt.didPaste {
             pasteSubtitle = receipt.targetApp.isEmpty ? "Pasted" : "Pasted to \(receipt.targetApp)"
         } else if settings.autoPaste, receipt != nil {
             pasteSubtitle = "Press ⌘V to paste" // AX degraded path (§8)
@@ -1060,6 +1086,36 @@ final class AppState {
         }
         phase = .pasted(appName: receipt?.targetApp ?? "")
 
+        recordHistory(raw: raw, processed: processed, mode: mode, reprocess: reprocess, targetApp: receipt?.targetApp)
+
+        let words = processed.split(separator: " ").count
+        if settings.showResultToast {
+            toast?.show(ResultToast(
+                words: words,
+                duration: lastSessionDuration,
+                subtitle: pasteSubtitle,
+                canUndo: receipt?.didPaste == true,
+                canReprocess: lastTranscript != nil
+            )) { [weak self] in
+                self?.undoLastPaste()
+            } onReprocess: { [weak self] in
+                self?.reprocess()
+            }
+        }
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard let self, case .pasted = self.phase else { return }
+            self.phase = .idle
+            // §6.6 "Always close window after dictation"; the docked indicator
+            // always collapses (otherwise Esc/⌘-digits would stay claimed at idle).
+            if self.settings.alwaysCloseWindowAfterDictation || self.isDocked {
+                self.dismissPopover(style: .pasted)
+            }
+        }
+    }
+
+    private func recordHistory(raw: String, processed: String, mode: Mode, reprocess: Bool, targetApp: String?) {
         if reprocess {
             // §6.3 per-entry reprocess history (undo stack). Target the entry
             // this toast belongs to — the user may have deleted it from the
@@ -1082,45 +1138,68 @@ final class AppState {
                 audioPath: lastAudioPath,
                 segments: lastTranscript?.segments ?? [],
                 undoStack: [],
-                targetApp: receipt?.targetApp
+                targetApp: targetApp
             )
             lastHistoryEntryID = entry.id
             appendHistory(entry)
         }
+    }
 
-        let words = processed.split(separator: " ").count
-        if settings.showResultToast {
-            toast?.show(ResultToast(
-                words: words,
-                duration: lastSessionDuration,
-                subtitle: pasteSubtitle,
-                canUndo: receipt?.didPaste == true,
-                canReprocess: lastTranscript != nil
-            )) { [weak self] in
-                self?.undoLastPaste()
-            } onReprocess: { [weak self] in
-                self?.reprocess()
+    // MARK: Review before paste (PasteGuard)
+
+    /// Shows the result and waits. Switching apps or typing anything but
+    /// Return/Esc discards it, so a later Return elsewhere can't paste it.
+    private func beginReview(_ review: PendingReview) {
+        Self.logToStderr("review before paste (\(review.mode.name) read screen context)")
+        pendingReview = review
+        transcriptText = review.processed
+        phase = .reviewing
+        if isDocked, !dockedExpanded {
+            expandDockedWindow()
+        } else if !isPopoverOpen {
+            summonPopover()
+        }
+        setReviewKeysEnabled?(true)
+        let ownPID = NSRunningApplication.current.processIdentifier
+        reviewAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let pid = app?.processIdentifier
+            Task { @MainActor in
+                guard let self, let review = self.pendingReview,
+                      pid != review.targetPID, pid != ownPID else { return }
+                self.discardReview(dismiss: true)
             }
         }
+    }
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(700))
-            guard let self, case .pasted = self.phase else { return }
-            self.phase = .idle
-            // A held result stays on screen until the user has read it. The
-            // docked indicator still collapses (it claims Esc/⌘-digits while
-            // open), but only after the toast's 6s, with the text on show.
-            if self.heldForReview != nil {
-                guard self.isDocked else { return }
-                try? await Task.sleep(for: .seconds(6))
-                guard case .idle = self.phase, self.heldForReview != nil else { return }
-            }
-            // §6.6 "Always close window after dictation"; the docked indicator
-            // always collapses (otherwise Esc/⌘-digits would stay claimed at idle).
-            if self.settings.alwaysCloseWindowAfterDictation || self.isDocked {
-                self.dismissPopover(style: .pasted)
-            }
+    private func endReview() -> PendingReview? {
+        guard case .reviewing = phase, let review = pendingReview else { return nil }
+        pendingReview = nil
+        setReviewKeysEnabled?(false)
+        if let observer = reviewAppObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            reviewAppObserver = nil
         }
+        return review
+    }
+
+    /// Return / "Paste": types the reviewed result into the app it was for.
+    func confirmReview() {
+        guard let review = endReview() else { return }
+        Task { @MainActor in
+            await deliver(raw: review.raw, processed: review.processed, mode: review.mode, reprocess: review.reprocess)
+        }
+    }
+
+    /// Esc / "Discard" / switching away: nothing is typed or copied; the
+    /// result is kept in History so it isn't lost.
+    func discardReview(dismiss: Bool = false) {
+        guard let review = endReview() else { return }
+        recordHistory(raw: review.raw, processed: review.processed, mode: review.mode, reprocess: review.reprocess, targetApp: nil)
+        phase = .idle
+        if dismiss { dismissPopover() }
     }
 
     /// §4.3 "Undo paste": restores the pre-paste clipboard snapshot. Only
@@ -1154,6 +1233,8 @@ final class AppState {
             // stop() keeps the session m4a; a cancelled dictation must not
             // leave it on disk (no history entry references it).
             Task { await audio.cancel() }
+        case .reviewing:
+            discardReview()
         case .idle, .pasting, .pasted:
             break
         }
@@ -1313,8 +1394,9 @@ final class AppState {
         popoverExitStyle = style
         // Dismiss clears the teleprompter — a stale transcript must not greet
         // the next summon (results live in History).
+        // Closing the popover on a pending review discards it (kept in History).
+        if case .reviewing = phase { discardReview() }
         transcriptText = ""
-        heldForReview = nil
         partialText = ""
         processedText = ""
         if isDocked {

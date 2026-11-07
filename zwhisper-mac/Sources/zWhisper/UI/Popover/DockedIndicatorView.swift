@@ -14,14 +14,14 @@ struct DockedIndicatorView: View {
     private var isActive: Bool {
         switch appState.phase {
         case .idle: return false
-        case .recording, .transcribing, .processing, .pasting, .pasted: return true
+        case .recording, .transcribing, .processing, .reviewing, .pasting, .pasted: return true
         }
     }
 
     private var isBusy: Bool {
         switch appState.phase {
         case .transcribing, .processing, .pasting: return true
-        case .idle, .recording, .pasted: return false
+        case .idle, .recording, .reviewing, .pasted: return false
         }
     }
 
