@@ -454,15 +454,17 @@ private struct ReviewPanel: View {
     let review: PendingReview
 
     var body: some View {
-        let lines = PasteGuard.reviewLines(review.processed)
+        let shown = PasteGuard.review(review.processed)
+        let lines = shown.lines
         let multiline = lines.count > 1
+        let warn = multiline || shown.hidden > 0
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
-                Image(systemName: multiline ? "exclamationmark.triangle.fill" : "eye")
-                Text(summary(lines: lines.count))
+                Image(systemName: warn ? "exclamationmark.triangle.fill" : "eye")
+                Text(summary(shown))
             }
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(multiline ? ZWColor.accentOrange : ZWColor.text2)
+            .foregroundStyle(warn ? ZWColor.accentOrange : ZWColor.text2)
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
@@ -491,12 +493,17 @@ private struct ReviewPanel: View {
         }
     }
 
-    private func summary(lines: Int) -> String {
-        let characters = review.processed.count
-        if lines > 1 {
-            return "Return types all \(lines) lines (\(characters) characters). Check each one."
+    private func summary(_ shown: PasteGuard.Review) -> String {
+        let lines = shown.lines.count
+        var text = lines > 1
+            ? "Return types all \(lines) lines (\(shown.scalars) characters)."
+            : "Return types this (\(shown.scalars) characters)."
+        if shown.hidden > 0 {
+            text += " \(shown.hidden) hidden \(shown.hidden == 1 ? "character is" : "characters are") marked ⟨U+…⟩."
+        } else if lines > 1 {
+            text += " Check each one."
         }
-        return "Return types this (\(characters) characters)."
+        return text
     }
 }
 
