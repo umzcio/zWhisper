@@ -29,6 +29,7 @@ FLUID_TREES = {
     "Parakeet": "FluidInference/parakeet-ultra-coreml/tree/main",
     "Parakeet vocabulary model": "FluidInference/parakeet-ctc-110m-coreml/tree/main",
     "Nemotron": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML/tree/main/multilingual/1120ms",
+    "Nemotron v2 encoder": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML/tree/main/encoder-v2/1120ms",
 }
 CONFIG = "https://huggingface.co/argmaxinc/whisperkit-coreml/resolve/main/config.json"
 
@@ -69,7 +70,8 @@ if mac_defaults != known["macDefaults"]:
 
 for name, tree in FLUID_TREES.items():
     try:
-        if not any(x["type"] == "file" for x in fetch(f"https://huggingface.co/api/models/{tree}")):
+        # Recursive: a folder can hold only a model directory (encoder-v2/1120ms).
+        if not any(x["type"] == "file" for x in fetch(f"https://huggingface.co/api/models/{tree}?recursive=true")):
             missing.append(name)
     except urllib.error.HTTPError:
         missing.append(name)

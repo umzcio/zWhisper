@@ -33,7 +33,7 @@ packages:
   # review each upgrade (scripts/check-models.sh reports new releases).
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.18.2
+    exactVersion: 0.18.4
   # Sparkle: direct distribution only (architecture §2) — excluded from any MAS build.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle

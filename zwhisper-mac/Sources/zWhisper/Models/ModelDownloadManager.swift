@@ -14,6 +14,7 @@ struct DownloadUpdate: Sendable {
 enum FluidModelStore {
     static let parakeetVersion: AsrModelVersion = .ultra
     static let nemotronSubdirectory = "multilingual/1120ms"
+    static let nemotronChunkMs = 1120
 
     static var parakeetFolder: URL { AsrModels.defaultCacheDirectory(for: parakeetVersion) }
     static var ctcFolder: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
@@ -32,7 +33,7 @@ enum FluidModelStore {
     static var isNemotronInstalled: Bool {
         let files = [
             "metadata.json", "tokenizer.json",
-            "encoder.mlmodelc/weights/weight.bin", "decoder_joint.mlmodelc/weights/weight.bin",
+            "encoder_v2.mlmodelc/weights/weight.bin", "decoder_joint.mlmodelc/weights/weight.bin",
         ]
         return files.allSatisfy {
             FileManager.default.fileExists(atPath: nemotronFolder.appendingPathComponent($0).path(percentEncoded: false))
@@ -56,15 +57,25 @@ enum FluidModelStore {
     static func downloadNemotron(progress: @escaping @Sendable (DownloadUpdate) -> Void) async throws {
         ModelPins.installFluidRevisions
         let total = Double(nemotronBytes)
-        try await ModelHub.download(
-            .nemotronMultilingual,
-            subdirectory: nemotronSubdirectory,
-            to: nemotronRepoFolder,
+        // FluidAudio's own variant download: it fetches encoder_v2.mlmodelc
+        // (the encoder M2/M3 Neural Engines compile) in place of the tier's
+        // encoder.mlmodelc, and for an install from an older build fetches
+        // only that file. Revisions come from the pins either way.
+        let folder = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+            languageCode: "auto",
+            chunkMs: nemotronChunkMs,
             progressHandler: { update in
                 progress(DownloadUpdate(fraction: update.fractionCompleted, bytes: Int64(update.fractionCompleted * total)))
-            },
-            shouldSkip: { $0.contains(".mlpackage") }
+            }
         )
+        // It must be the folder the pins verify and the engine loads.
+        func normalized(_ url: URL) -> String {
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
+            return path.hasSuffix("/") ? String(path.dropLast()) : path
+        }
+        guard normalized(folder) == normalized(nemotronFolder) else {
+            throw ModelIntegrityError.unexpected(file: folder.path(percentEncoded: false))
+        }
     }
 
     /// Hugging Face tree listings whose files make up each download.
@@ -78,7 +89,13 @@ enum FluidModelStore {
                 URL(string: "https://huggingface.co/api/models/\(Repo.parakeetCtc110m.remotePath)/tree/main?recursive=true")!,
             ]
         case .nemotron:
-            return [URL(string: "https://huggingface.co/api/models/\(Repo.nemotronMultilingual.remotePath)/tree/main/\(nemotronSubdirectory)?recursive=true")!]
+            // The tier folder (its encoder.mlmodelc is skipped, see byteCount)
+            // plus the v2 encoder FluidAudio puts in its place.
+            let base = "https://huggingface.co/api/models/\(Repo.nemotronMultilingual.remotePath)/tree/main"
+            return [
+                URL(string: "\(base)/\(nemotronSubdirectory)?recursive=true")!,
+                URL(string: "\(base)/encoder-v2/\(nemotronChunkMs)ms?recursive=true")!,
+            ]
         }
     }
 }
@@ -209,7 +226,13 @@ struct ModelDownloadManager {
         }
         guard let nodes = try? JSONDecoder().decode([Node].self, from: data) else { return nil }
         let bytes = nodes
-            .filter { $0.type == "file" && !($0.path ?? "").contains(".mlpackage") }
+            // Sources and Nemotron's tier encoder.mlmodelc are never downloaded
+            // (FluidAudio fetches encoder-v2/<tier>/encoder_v2.mlmodelc instead).
+            .filter { node in
+                let path = node.path ?? ""
+                let skippedEncoder = path.hasPrefix(FluidModelStore.nemotronSubdirectory + "/encoder.mlmodelc/")
+                return node.type == "file" && !path.contains(".mlpackage") && !skippedEncoder
+            }
             .reduce(Int64(0)) { $0 + ($1.size ?? 0) }
         return bytes > 0 ? bytes : nil
     }

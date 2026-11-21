@@ -151,10 +151,25 @@ struct ModelPinsTests {
         }
     }
 
-    @Test("only the CTC head is optional in the shipped pins")
+    @Test("only the CTC head and Nemotron's pre-v2 encoder are optional in the shipped pins")
     func shippedOptionals() throws {
         let optional = ModelCatalogEntry.locals.flatMap { (try? ModelPins.pins(for: $0.id)) ?? [] }.compactMap(\.optional).flatMap { $0 }
-        #expect(optional == ["CtcHead.mlmodelc"])
+        #expect(optional.sorted() == ["CtcHead.mlmodelc", "encoder.mlmodelc"])
+        // Nemotron needs the v2 encoder (FluidAudio 0.18.4 loads it in place of encoder.mlmodelc).
+        let nemotron = try ModelPins.pins(for: LocalModelFamily.nemotronID)
+        #expect(nemotron.contains { $0.files.keys.contains("encoder_v2.mlmodelc/weights/weight.bin") })
+    }
+
+    @Test("an incomplete folder is kept for the next download; a tampered one is deleted")
+    func incompleteIsKept() throws {
+        let (folder, files) = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var more = files
+        more["later.bin"] = String(repeating: "a", count: 64)
+        #expect(throws: ModelIntegrityError.incomplete(file: "later.bin")) {
+            try ModelPins.verify(folder: folder, expected: more)
+        }
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("weights.bin").path(percentEncoded: false)))
     }
 
     @Test("FluidAudio downloads use the pinned commits")

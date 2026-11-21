@@ -200,9 +200,24 @@
      "tokenizer.json": "fb70c8fcb6472cda2bdb799b156a8941e72762344a7c636d3b1275f1d53c4a6b"
     },
     "folder": "nemotron",
+    "optional": [
+     "encoder.mlmodelc"
+    ],
     "prefix": "multilingual/1120ms/",
     "repo": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
-    "revision": "1a41b75758b0337ff67db7d5408280aaaf23074e"
+    "revision": "a70b9d1c33594f1f4cf3f4eca9b4a0a8f44a9f59"
+   },
+   {
+    "files": {
+     "encoder_v2.mlmodelc/analytics/coremldata.bin": "5488ed81fa1e370dd5411218d9b0e0562d01ca33c45b9ea1935bab6c8e8dc943",
+     "encoder_v2.mlmodelc/coremldata.bin": "93d7f1b6412b965b379f3359e38f9c4330099b5b41f9d30b85bf7286b098a78d",
+     "encoder_v2.mlmodelc/model.mil": "c292d3e125751aa8cef27b59f9820a0f2209d1520d5f5eefd1ee1952fd377098",
+     "encoder_v2.mlmodelc/weights/weight.bin": "e3dbd37659c7ef51d2dc691afac42fbdd1f04998fa62816ff0f2eebec5cc3d01"
+    },
+    "folder": "nemotron",
+    "prefix": "encoder-v2/1120ms/",
+    "repo": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+    "revision": "a70b9d1c33594f1f4cf3f4eca9b4a0a8f44a9f59"
    }
   ],
   "parakeet-tdt-v3": [

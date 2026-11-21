@@ -188,7 +188,8 @@ struct ModeFlowTests {
             requestRecordPermission: { true },
             captureContext: { _, _ in context },
             secureInputEnabled: { environment.secureInput },
-            focusedElement: { environment.focus }
+            focusedElement: { environment.focus },
+            workspaceNotifications: NotificationCenter()
         )
         await state.prepareTranscription()
         return (state, audio, transcription, processor, paste)

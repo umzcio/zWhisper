@@ -42,9 +42,14 @@ MODELS["parakeet-tdt-v3"] = [
     {"repo": "FluidInference/parakeet-ctc-110m-coreml", "prefix": "", "folder": "ctc",
      "optional": ["CtcHead.mlmodelc"]},
 ]
+# FluidAudio 0.18.4+ loads encoder_v2.mlmodelc (published in encoder-v2/,
+# moved into the tier folder) in place of encoder.mlmodelc, which a fresh
+# download skips; an install from an older build may still hold it, whole.
+NEMOTRON = "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
 MODELS["nemotron-3.5-streaming"] = [
-    {"repo": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
-     "prefix": "multilingual/1120ms/", "folder": "nemotron"},
+    {"repo": NEMOTRON, "prefix": "multilingual/1120ms/", "folder": "nemotron",
+     "optional": ["encoder.mlmodelc"]},
+    {"repo": NEMOTRON, "prefix": "encoder-v2/1120ms/", "folder": "nemotron"},
 ]
 
 def get(url):

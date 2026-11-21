@@ -42,7 +42,13 @@ struct AppStateTests {
         #expect(state.cancelShakeTrigger == 1)
         #expect(state.isPopoverOpen)
 
-        try await Task.sleep(for: .milliseconds(600))
+        // Still open while the shake plays, then closed. The close is polled
+        // for: a fixed sleep raced the busy main actor of the parallel suite.
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(state.isPopoverOpen)
+        for _ in 0 ..< 100 where state.isPopoverOpen {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(!state.isPopoverOpen)
     }
 

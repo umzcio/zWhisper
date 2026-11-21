@@ -247,6 +247,9 @@ final class AppState {
     private let makeCloudTranscriber: @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing
     private let secureInputEnabled: @MainActor () -> Bool
     private let focusedElement: @MainActor () -> AnyHashable?
+    /// App-activation notifications (NSWorkspace's in the app; tests pass
+    /// their own so other apps on the machine can't end a test's review).
+    private let workspaceNotifications: NotificationCenter
     private var startInFlight = false
     private var metering = false
 
@@ -271,7 +274,8 @@ final class AppState {
             CloudTranscriber(provider: $0, apiKey: $1, server: $2)
         },
         secureInputEnabled: @escaping @MainActor () -> Bool = { IsSecureEventInputEnabled() },
-        focusedElement: @escaping @MainActor () -> AnyHashable? = AppState.systemFocusedElement
+        focusedElement: @escaping @MainActor () -> AnyHashable? = AppState.systemFocusedElement,
+        workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter
     ) {
         // Pinned FluidAudio revisions are in effect before any FluidAudio call.
         _ = ModelPins.installFluidRevisions
@@ -286,6 +290,7 @@ final class AppState {
         self.makeCloudTranscriber = makeCloudTranscriber
         self.secureInputEnabled = secureInputEnabled
         self.focusedElement = focusedElement
+        self.workspaceNotifications = workspaceNotifications
     }
 
     /// The focused UI element system-wide (Accessibility), compared to tell
@@ -324,6 +329,7 @@ final class AppState {
         modelStatus = .downloading(0)
         do {
             await loadModelPreferences()
+            await finishPartialActiveModel()
             if let activeID = modelPreferences.activeLocalID,
                ModelDownloadManager.isDownloaded(variant: activeID)
             {
@@ -357,6 +363,26 @@ final class AppState {
             modelStatus = .failed
         }
         await loadVocabulary()
+    }
+
+    /// The chosen local model is on disk but lacks files this build pins: an
+    /// interrupted download, or an update that needs a new file (Nemotron's
+    /// v2 encoder in FluidAudio 0.18.4). Finish its pinned download, which
+    /// fetches only the gap, instead of falling back to the default model.
+    private func finishPartialActiveModel() async {
+        guard let activeID = modelPreferences.activeLocalID,
+              !ModelDownloadManager.isDownloaded(variant: activeID),
+              ModelPins.hasPartialInstall(activeID)
+        else { return }
+        Self.logToStderr("finishing the download of \(activeID)")
+        do {
+            _ = try await ModelDownloadManager().download(variant: activeID) { [weak self] update in
+                Task { @MainActor in self?.modelStatus = .downloading(update.fraction) }
+            }
+        } catch {
+            Self.logToStderr("finishing \(activeID) failed: \(error)")
+        }
+        await loadModelPreferences()
     }
 
     func loadVocabulary() async {
@@ -1259,7 +1285,7 @@ final class AppState {
         setReviewKeys?(.watching)
         watchReview(review)
         let ownPID = NSRunningApplication.current.processIdentifier
-        reviewAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        reviewAppObserver = workspaceNotifications.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
@@ -1267,6 +1293,7 @@ final class AppState {
             Task { @MainActor in
                 guard let self, let review = self.pendingReview,
                       pid != review.targetPID, pid != ownPID else { return }
+                Self.logToStderr("review discarded: another app became active (pid \(pid.map(String.init) ?? "?"))")
                 self.discardReview(dismiss: true)
             }
         }
@@ -1280,27 +1307,36 @@ final class AppState {
         reviewWatchTask?.cancel()
         let focus = focusedElement()
         let started = ContinuousClock.now
+        let armDelay = reviewArmDelay
+        // Holds AppState only for each check, never across the sleeps.
         reviewWatchTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: self?.reviewArmDelay ?? .zero)
-            while let self, !Task.isCancelled, self.pendingReview?.id == review.id {
-                if ContinuousClock.now - started >= self.reviewExpiry {
-                    Self.logToStderr("review expired; discarded to History")
-                    self.discardReview(dismiss: true)
-                    return
-                }
-                if let focus, let now = self.focusedElement(), now != focus {
-                    self.discardReview(dismiss: true)
-                    return
-                }
-                let secure = self.secureInputEnabled()
-                self.reviewSecureInput = secure
-                if self.reviewReturnArmed == secure {
-                    self.reviewReturnArmed = !secure
-                    self.setReviewKeys?(secure ? .watching : .armed)
-                }
+            try? await Task.sleep(for: armDelay)
+            while !Task.isCancelled, self?.checkReview(review, focus: focus, started: started) == true {
                 try? await Task.sleep(for: .milliseconds(150))
             }
         }
+    }
+
+    /// One watcher tick; false once the review has ended.
+    private func checkReview(_ review: PendingReview, focus: AnyHashable?, started: ContinuousClock.Instant) -> Bool {
+        guard pendingReview?.id == review.id else { return false }
+        if ContinuousClock.now - started >= reviewExpiry {
+            Self.logToStderr("review expired; discarded to History")
+            discardReview(dismiss: true)
+            return false
+        }
+        if let focus, let now = focusedElement(), now != focus {
+            Self.logToStderr("review discarded: focus moved")
+            discardReview(dismiss: true)
+            return false
+        }
+        let secure = secureInputEnabled()
+        reviewSecureInput = secure
+        if reviewReturnArmed == secure {
+            reviewReturnArmed = !secure
+            setReviewKeys?(secure ? .watching : .armed)
+        }
+        return true
     }
 
     private func endReview() -> PendingReview? {
@@ -1313,7 +1349,7 @@ final class AppState {
         setReviewKeys?(.off)
         popover?.animateFrame(to: popoverSize)
         if let observer = reviewAppObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            workspaceNotifications.removeObserver(observer)
             reviewAppObserver = nil
         }
         return review

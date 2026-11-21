@@ -32,7 +32,7 @@ enum ModelIntegrityError: LocalizedError, Equatable {
         case .unpinned(let id):
             "zWhisper has no verified copy of \(id) on record."
         case .incomplete(let file):
-            "The model download is incomplete (\(file) is missing), so it was removed. Download it again."
+            "The model download is incomplete (\(file) is missing). Download it again to finish it."
         case .mismatch(let file), .unexpected(let file):
             "The downloaded model didn't match the version zWhisper verified (\(file)), so it was removed."
         }
@@ -107,6 +107,16 @@ enum ModelPins {
         }
     }
 
+    /// Some pinned file of the model is on disk (a started or older install).
+    static func hasPartialInstall(_ id: String) -> Bool {
+        guard let expectations = try? expectations(for: id) else { return false }
+        return expectations.contains { expectation in
+            expectation.files.keys.contains {
+                FileManager.default.fileExists(atPath: expectation.folder.appendingPathComponent($0).path(percentEncoded: false))
+            }
+        }
+    }
+
     /// Every file the loader needs is on disk (existence only, no hashing):
     /// a folder left half-written by a failed download isn't "installed".
     static func isComplete(_ id: String) -> Bool {
@@ -126,10 +136,18 @@ enum ModelPins {
             do {
                 try verify(folder: expectation.folder, expected: expectation.files, optional: expectation.optional)
             } catch {
-                try? FileManager.default.removeItem(at: expectation.folder)
+                discardIfUntrusted(expectation.folder, after: error)
                 throw error
             }
         }
+    }
+
+    /// A changed or unknown file makes the folder untrusted: it is deleted.
+    /// A merely incomplete one holds only verified files, so it is kept for
+    /// the next (pinned) download to finish, which then fetches just the gap.
+    private static func discardIfUntrusted(_ folder: URL, after error: Error) {
+        if case ModelIntegrityError.incomplete = error { return }
+        try? FileManager.default.removeItem(at: folder)
     }
 
     /// Before loading: a folder already verified against these pins is
@@ -139,7 +157,7 @@ enum ModelPins {
             do {
                 try verify(folder: expectation.folder, expected: expectation.files, optional: expectation.optional)
             } catch {
-                try? FileManager.default.removeItem(at: expectation.folder)
+                discardIfUntrusted(expectation.folder, after: error)
                 throw error
             }
         }
