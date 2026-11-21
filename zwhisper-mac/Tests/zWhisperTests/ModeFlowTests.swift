@@ -7,18 +7,27 @@ final class MockModeProcessor: ModeProcessorProtocol, @unchecked Sendable {
     private(set) var calls: [(raw: String, mode: Mode)] = []
     var chunks = ["Dear team,", "Dear team,\n\nThe meeting has been moved to Friday.", "Dear team,\n\nThe meeting has been moved to Friday.\n\nBest, Alex"]
     var error: Error?
+    /// Pause before each chunk (processing-phase tests).
+    var chunkDelay: Duration?
 
     func process(raw: String, mode: Mode, context: CapturedContext?, personalContext: String? = nil) -> AsyncThrowingStream<String, Error> {
         calls.append((raw, mode))
         let chunks = self.chunks
         let error = self.error
+        let delay = chunkDelay
         return AsyncThrowingStream { continuation in
             if let error {
                 continuation.finish(throwing: error)
                 return
             }
-            for chunk in chunks { continuation.yield(chunk) }
-            continuation.finish()
+            let task = Task {
+                for chunk in chunks {
+                    if let delay { try? await Task.sleep(for: delay) }
+                    continuation.yield(chunk)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }
@@ -150,16 +159,26 @@ private final class SSEStub: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// What the review watcher sees: Secure Input and the focused element.
+@MainActor
+final class ReviewEnvironment {
+    var secureInput = false
+    var focus: AnyHashable?
+}
+
 @Suite("AppState modes flow (M5)")
 @MainActor
 struct ModeFlowTests {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zwhisper-tests-\(UUID().uuidString)", isDirectory: true)
+    let environment = ReviewEnvironment()
+
     private func makeState(context: CapturedContext? = nil) async -> (AppState, MockAudioCaptureEngine, MockTranscriptionEngine, MockModeProcessor, MockPasteController) {
         let audio = MockAudioCaptureEngine()
         let transcription = MockTranscriptionEngine()
         let processor = MockModeProcessor()
         let paste = MockPasteController()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("zwhisper-tests-\(UUID().uuidString)", isDirectory: true)
+        let environment = self.environment
         let state = AppState(
             audio: audio,
             transcription: transcription,
@@ -167,7 +186,9 @@ struct ModeFlowTests {
             paste: paste,
             persistence: PersistenceStore(directory: dir),
             requestRecordPermission: { true },
-            captureContext: { _, _ in context }
+            captureContext: { _, _ in context },
+            secureInputEnabled: { environment.secureInput },
+            focusedElement: { environment.focus }
         )
         await state.prepareTranscription()
         return (state, audio, transcription, processor, paste)
@@ -256,6 +277,7 @@ struct ModeFlowTests {
         }
         #expect(state.pendingReview == nil)
         #expect(state.history.first?.processedText == processor.chunks.last)
+        #expect(state.history.first?.unreviewed == nil)
     }
 
     @Test("the review can't be shrunk to Mini; the user's size returns afterwards")
@@ -274,6 +296,174 @@ struct ModeFlowTests {
         #expect(state.popoverSize == .main)
     }
 
+    @Test("Return is claimed only after the arming delay, and released when the review ends")
+    func reviewArmsAfterDelay() async throws {
+        let (state, _, _, _, _) = await makeState(context: thread)
+        var keys: [AppState.ReviewKeys] = []
+        state.setReviewKeys = { keys.append($0) }
+        state.reviewArmDelay = .milliseconds(150)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state) // 400ms: armed by now
+        #expect(keys.first == .watching)
+        #expect(keys.contains(.armed))
+        #expect(state.reviewReturnArmed)
+        state.cancel()
+        #expect(keys.last == .off)
+    }
+
+    @Test("under Secure Input Return is never claimed; only a click pastes")
+    func secureInputNeverArms() async throws {
+        environment.secureInput = true
+        let (state, _, _, processor, paste) = await makeState(context: thread)
+        var keys: [AppState.ReviewKeys] = []
+        state.setReviewKeys = { keys.append($0) }
+        state.reviewArmDelay = .milliseconds(10)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(state.phase == .reviewing)
+        #expect(!keys.contains(.armed))
+        #expect(!state.reviewReturnArmed)
+        #expect(state.reviewSecureInput)
+        #expect(paste.pastedText == nil)
+        // Secure Input ends: Return is armed again.
+        environment.secureInput = false
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(keys.last == .armed)
+        state.confirmReview() // the Paste button
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == processor.chunks.last)
+    }
+
+    @Test("an unanswered review expires into History, unpasted")
+    func reviewExpires() async throws {
+        let (state, _, _, processor, paste) = await makeState(context: thread)
+        state.reviewExpiry = .milliseconds(200)
+        state.reviewArmDelay = .milliseconds(10)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(state.phase == .idle)
+        #expect(state.pendingReview == nil)
+        #expect(paste.pastedText == nil)
+        #expect(state.history.first?.processedText == processor.chunks.last)
+        #expect(state.history.first?.unreviewed == true)
+    }
+
+    @Test("moving focus to another field discards the review")
+    func focusChangeDiscards() async throws {
+        environment.focus = AnyHashable("mail-body")
+        let (state, _, _, _, paste) = await makeState(context: thread)
+        state.reviewArmDelay = .milliseconds(10)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(state.phase == .reviewing)
+        environment.focus = AnyHashable("terminal")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(state.phase == .idle)
+        #expect(paste.pastedText == nil)
+        state.confirmReview()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == nil)
+    }
+
+    @Test("Reprocess is refused while a dictation is starting, and a start while Reprocess runs")
+    func reprocessAndStartExclude() async throws {
+        let (state, audio, _, processor, _) = await makeState(context: thread)
+        state.setActiveMode(BuiltInModes.superMode)
+        await dictate(state)
+        state.confirmReview()
+        try await Task.sleep(for: .milliseconds(900)) // pasted → idle
+        #expect(state.phase == .idle)
+        #expect(processor.calls.count == 1)
+
+        // A start parked in the engine: Reprocess must not run alongside it.
+        await audio.armStartGate()
+        state.startDictation()
+        for _ in 0 ..< 50 {
+            if await audio.startCalls == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        state.reprocess()
+        #expect(processor.calls.count == 1)
+        await audio.releaseStartGate()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .recording = state.phase else {
+            Issue.record("expected recording, got \(state.phase)")
+            return
+        }
+        state.cancel()
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Reprocess claims the state machine at once: a start is refused.
+        processor.chunkDelay = .milliseconds(50)
+        state.reprocess()
+        #expect(state.phase == .processing)
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await audio.startCalls == 2)
+        try await Task.sleep(for: .milliseconds(300))
+        // Exactly one pipeline ran: the reprocess, never a recording.
+        #expect(processor.calls.count == 2)
+        if case .recording = state.phase { Issue.record("a start ran alongside the reprocess") }
+    }
+
+    @Test("Esc during processing deletes the dictation's recording")
+    func cancelDeletesRecording() async throws {
+        let (state, _, _, processor, _) = await makeState()
+        let file = try makeRecording()
+        processor.chunkDelay = .milliseconds(100)
+        state.setActiveMode(BuiltInModes.message)
+        state.startDictation()
+        try await Task.sleep(for: .milliseconds(100))
+        state.stopDictation()
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(state.phase == .processing)
+        state.cancel()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!FileManager.default.fileExists(atPath: file.path(percentEncoded: false)))
+        #expect(state.history.isEmpty)
+    }
+
+    @Test("a failed rewrite deletes the dictation's recording")
+    func failureDeletesRecording() async throws {
+        let (state, _, _, processor, _) = await makeState()
+        let file = try makeRecording()
+        processor.error = URLError(.notConnectedToInternet)
+        state.setActiveMode(BuiltInModes.message)
+        await dictate(state)
+        #expect(state.modeProcessingFailed)
+        #expect(!FileManager.default.fileExists(atPath: file.path(percentEncoded: false)))
+    }
+
+    @Test("launch removes recordings no History entry points to")
+    func launchRemovesOrphans() async throws {
+        let (state, _, _, _, _) = await makeState()
+        let audioDir = dir.appendingPathComponent("audio", isDirectory: true)
+        try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        let kept = audioDir.appendingPathComponent("kept.m4a")
+        let orphan = audioDir.appendingPathComponent("orphan.m4a")
+        FileManager.default.createFile(atPath: kept.path(percentEncoded: false), contents: Data())
+        FileManager.default.createFile(atPath: orphan.path(percentEncoded: false), contents: Data())
+        let entry = HistoryEntry(
+            id: UUID(), createdAt: .now, duration: 1, modeID: UUID(), rawTranscript: "t", processedText: "t",
+            audioPath: "audio/kept.m4a", segments: [], undoStack: [], targetApp: nil
+        )
+        try await PersistenceStore(directory: dir).save([entry], to: "history.json")
+        await state.loadHistory()
+        #expect(FileManager.default.fileExists(atPath: kept.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: orphan.path(percentEncoded: false)))
+    }
+
+    /// The file the mock engine reports as the session recording.
+    private func makeRecording() throws -> URL {
+        let audioDir = dir.appendingPathComponent("audio", isDirectory: true)
+        try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        let file = audioDir.appendingPathComponent("mock-session.m4a")
+        FileManager.default.createFile(atPath: file.path(percentEncoded: false), contents: Data("m4a".utf8))
+        return file
+    }
+
     @Test("Esc discards: nothing pasted, result kept in History")
     func reviewDiscard() async throws {
         let (state, _, _, processor, paste) = await makeState(context: thread)
@@ -284,6 +474,7 @@ struct ModeFlowTests {
         #expect(paste.pastedText == nil)
         #expect(paste.copiedText == nil)
         #expect(state.history.first?.processedText == processor.chunks.last)
+        #expect(state.history.first?.unreviewed == true)
         // A late confirm does nothing.
         state.confirmReview()
         try await Task.sleep(for: .milliseconds(100))

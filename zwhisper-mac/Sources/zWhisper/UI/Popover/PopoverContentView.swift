@@ -253,17 +253,26 @@ struct PopoverContentView: View {
         let sent = appState.pendingReview?.sent ?? .init()
         let source = sent.selection && sent.clipboard ? "selection + clipboard"
             : sent.clipboard ? "clipboard" : "selection"
+        let armed = appState.reviewReturnArmed
+        let title = target.isEmpty ? "Paste" : "Paste to \(target)"
         return HStack(spacing: 12) {
             Button {
                 appState.confirmReview()
             } label: {
-                Label(target.isEmpty ? "Paste" : "Paste to \(target)", systemImage: "return")
-                    .font(.system(size: 11, weight: .semibold))
+                // The Return glyph shows only while Return really pastes.
+                Group {
+                    if armed {
+                        Label(title, systemImage: "return")
+                    } else {
+                        Text(title)
+                    }
+                }
+                .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .fixedSize()
-            .help("Press Return to paste")
+            .help(armed ? "Press Return to paste" : "Click to paste")
             Button {
                 appState.cancel()
             } label: {
@@ -274,9 +283,11 @@ struct PopoverContentView: View {
             .foregroundStyle(ZWColor.text2)
             .help("Press \(CancelShortcut.current.displayText) to discard")
             Spacer(minLength: 0)
-            Text("Used your \(source)")
-                .font(.system(size: 10))
-                .foregroundStyle(ZWColor.text2)
+            // Secure Input hides keystrokes from zWhisper, so Return isn't
+            // claimed and typing can't discard: only the buttons act.
+            Text(appState.reviewSecureInput ? "Secure input on: click to paste" : "Used your \(source)")
+                .font(.system(size: 10, weight: appState.reviewSecureInput ? .medium : .regular))
+                .foregroundStyle(appState.reviewSecureInput ? ZWColor.accentOrange : ZWColor.text2)
                 .lineLimit(1)
         }
         .padding(.top, 8)
@@ -446,64 +457,13 @@ private struct StreamingText: View {
     }
 }
 
-/// Review before paste: every line Return would type, numbered, wrapped and
-/// scrollable, with invisible characters drawn as markers. A result of more
-/// than one line is called out, since each line break acts as Return in a
-/// shell.
+/// Review before paste: the result as ReviewText draws it, filling the
+/// space the waveform and teleprompter normally take.
 private struct ReviewPanel: View {
     let review: PendingReview
 
     var body: some View {
-        let shown = PasteGuard.review(review.processed)
-        let lines = shown.lines
-        let multiline = lines.count > 1
-        let warn = multiline || shown.hidden > 0
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Image(systemName: warn ? "exclamationmark.triangle.fill" : "eye")
-                Text(summary(shown))
-            }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(warn ? ZWColor.accentOrange : ZWColor.text2)
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            if multiline {
-                                Text("\(index + 1)")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(ZWColor.text3)
-                                    .frame(minWidth: 18, alignment: .trailing)
-                            }
-                            Text(line.isEmpty ? " " : line)
-                                .font(.system(size: 13))
-                                .foregroundStyle(ZWColor.text1)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                .textSelection(.enabled)
-                .padding(8)
-            }
-            .scrollIndicators(.visible)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(ZWColor.surface2.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-    }
-
-    private func summary(_ shown: PasteGuard.Review) -> String {
-        let lines = shown.lines.count
-        var text = lines > 1
-            ? "Return types all \(lines) lines (\(shown.scalars) characters)."
-            : "Return types this (\(shown.scalars) characters)."
-        if shown.hidden > 0 {
-            text += " \(shown.hidden) hidden \(shown.hidden == 1 ? "character is" : "characters are") marked ⟨U+…⟩."
-        } else if lines > 1 {
-            text += " Check each one."
-        }
-        return text
+        ReviewText(text: review.processed, action: "Return types")
     }
 }
 

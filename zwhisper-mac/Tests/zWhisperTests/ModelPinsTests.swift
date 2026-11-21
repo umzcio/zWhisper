@@ -107,13 +107,54 @@ struct ModelPinsTests {
         }
     }
 
-    @Test("pinned files that weren't downloaded don't fail the check")
-    func subsetIsFine() throws {
+    @Test("a pinned file that's missing fails the check, so no loader can fetch its own copy")
+    func incompleteFails() throws {
         let (folder, files) = try makeFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         var more = files
-        more["README-like.json"] = String(repeating: "a", count: 64)
-        try ModelPins.verify(folder: folder, expected: more)
+        more["tokenizer.json"] = String(repeating: "a", count: 64)
+        #expect(throws: ModelIntegrityError.incomplete(file: "tokenizer.json")) {
+            try ModelPins.verify(folder: folder, expected: more)
+        }
+        // Each file removed in turn from an otherwise valid folder fails too.
+        for name in files.keys {
+            let (other, pins) = try makeFolder()
+            defer { try? FileManager.default.removeItem(at: other) }
+            try FileManager.default.removeItem(at: other.appendingPathComponent(name))
+            #expect(throws: ModelIntegrityError.incomplete(file: name)) {
+                try ModelPins.verify(folder: other, expected: pins)
+            }
+        }
+    }
+
+    @Test("an optional component may be absent, but only as a whole")
+    func optionalComponent() throws {
+        let (folder, files) = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var more = files
+        more["Head.mlmodelc/model.mil"] = String(repeating: "a", count: 64)
+        more["Head.mlmodelc/weights.bin"] = String(repeating: "b", count: 64)
+        try ModelPins.verify(folder: folder, expected: more, optional: ["Head.mlmodelc"])
+        // Half of it present: incomplete.
+        let half = Data("mil".utf8)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Head.mlmodelc"), withIntermediateDirectories: true)
+        try half.write(to: folder.appendingPathComponent("Head.mlmodelc/model.mil"))
+        more["Head.mlmodelc/model.mil"] = hex(half)
+        #expect(throws: ModelIntegrityError.incomplete(file: "Head.mlmodelc/weights.bin")) {
+            try ModelPins.verify(folder: folder, expected: more, optional: ["Head.mlmodelc"])
+        }
+        // Optional only names whole components: a required file stays required.
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("Head.mlmodelc"))
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("weights.bin"))
+        #expect(throws: ModelIntegrityError.incomplete(file: "weights.bin")) {
+            try ModelPins.verify(folder: folder, expected: files, optional: ["Head.mlmodelc"])
+        }
+    }
+
+    @Test("only the CTC head is optional in the shipped pins")
+    func shippedOptionals() throws {
+        let optional = ModelCatalogEntry.locals.flatMap { (try? ModelPins.pins(for: $0.id)) ?? [] }.compactMap(\.optional).flatMap { $0 }
+        #expect(optional == ["CtcHead.mlmodelc"])
     }
 
     @Test("FluidAudio downloads use the pinned commits")

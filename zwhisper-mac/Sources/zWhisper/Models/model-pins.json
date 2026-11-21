@@ -259,6 +259,9 @@
      "vocab.json": "319d386eead79aadc80df9c3ecc8340d1a727efb7c02a8847eb940380dd61e1f"
     },
     "folder": "ctc",
+    "optional": [
+     "CtcHead.mlmodelc"
+    ],
     "prefix": "",
     "repo": "FluidInference/parakeet-ctc-110m-coreml",
     "revision": "accdafd8cf8a2ff1cabe3c11e54416b405d409aa"

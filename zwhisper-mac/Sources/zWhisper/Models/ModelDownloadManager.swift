@@ -140,12 +140,12 @@ struct ModelDownloadManager {
             guard !FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) else { continue }
             let url = URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")!
             let (data, response) = try await URLSession.shared.data(from: url)
-            // tokenizer.json is required; the rest are best-effort config files.
-            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                try data.write(to: destination)
-            } else if file == "tokenizer.json" {
+            // Every pinned tokenizer file is required: a gap would let
+            // WhisperKit fetch its own unpinned copy at load.
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 throw TranscriptionError.modelNotLoaded
             }
+            try data.write(to: destination)
         }
     }
 
@@ -230,7 +230,11 @@ struct ModelDownloadManager {
         }
     }
 
+    /// Installed means every pinned file the loader reads is on disk: a
+    /// folder a failed or cancelled download left behind shows as not
+    /// downloaded, so it is fetched (pinned) again rather than loaded.
     static func isDownloaded(variant: String) -> Bool {
+        guard ModelPins.isComplete(variant) else { return false }
         switch LocalModelFamily(id: variant) {
         case .parakeet: return FluidModelStore.isParakeetInstalled
         case .nemotron: return FluidModelStore.isNemotronInstalled

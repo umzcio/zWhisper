@@ -80,8 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onConfirmReview: { appState.confirmReview() },
             onReviewInterrupted: { appState.discardReview(dismiss: true) }
         )
-        appState.setReviewKeysEnabled = { [hotkeyManager] enabled in
-            hotkeyManager.setReviewKeysEnabled(enabled)
+        appState.setReviewKeys = { [hotkeyManager] keys in
+            hotkeyManager.setReviewKeys(keys)
         }
         hotkeyManager.setUpPushToTalk(
             onStart: { appState.startPushToTalk() },

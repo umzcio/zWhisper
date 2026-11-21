@@ -38,7 +38,9 @@ for variant, tokenizer_repo in WHISPER.items():
     ]
 MODELS["parakeet-tdt-v3"] = [
     {"repo": "FluidInference/parakeet-ultra-coreml", "prefix": "", "folder": "parakeet"},
-    {"repo": "FluidInference/parakeet-ctc-110m-coreml", "prefix": "", "folder": "ctc"},
+    # FluidAudio never fetches the CTC head; it may be absent, but only whole.
+    {"repo": "FluidInference/parakeet-ctc-110m-coreml", "prefix": "", "folder": "ctc",
+     "optional": ["CtcHead.mlmodelc"]},
 ]
 MODELS["nemotron-3.5-streaming"] = [
     {"repo": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
@@ -86,8 +88,11 @@ for model, parts in MODELS.items():
             files[relative] = digest
         if not files:
             raise SystemExit(f"error: no files for {model} in {repo}/{prefix}")
-        pinned.append({"repo": repo, "revision": sha, "folder": part["folder"],
-                       "prefix": prefix, "files": dict(sorted(files.items()))})
+        entry = {"repo": repo, "revision": sha, "folder": part["folder"],
+                 "prefix": prefix, "files": dict(sorted(files.items()))}
+        if "optional" in part:
+            entry["optional"] = part["optional"]
+        pinned.append(entry)
         print(f"{model}: {repo}@{sha[:10]} {len(files)} files")
     out["models"][model] = pinned
 

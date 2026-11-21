@@ -55,4 +55,13 @@ actor PersistenceStore {
     func deleteFile(_ relativePath: String) {
         try? FileManager.default.removeItem(at: directory.appendingPathComponent(relativePath))
     }
+
+    /// Deletes session recordings in audio/ that `keeping` doesn't name.
+    func removeUnreferencedAudio(keeping: Set<String>) {
+        let folder = directory.appendingPathComponent("audio", isDirectory: true)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false)) else { return }
+        for name in names where name.hasSuffix(".m4a") && !keeping.contains("audio/\(name)") {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+    }
 }

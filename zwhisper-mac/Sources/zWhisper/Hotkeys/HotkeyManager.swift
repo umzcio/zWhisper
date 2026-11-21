@@ -64,7 +64,7 @@ final class HotkeyManager {
             Task { @MainActor in onConfirmReview() }
         }
         // Never left registered across launches (KeyboardShortcuts persists it).
-        setReviewKeysEnabled(false)
+        setReviewKeys(.off)
         // While a review waits, any other key means the user moved on: discard,
         // so a Return meant for something else can never paste it later.
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -75,9 +75,13 @@ final class HotkeyManager {
 
     private var reviewActive = false
 
-    func setReviewKeysEnabled(_ enabled: Bool) {
-        reviewActive = enabled
-        KeyboardShortcuts.setShortcut(enabled ? .init(.return) : nil, for: .confirmReview)
+    /// `.watching`: any key but the cancel chord discards the review.
+    /// `.armed`: also claims bare Return to paste it. AppState arms Return
+    /// only after a short delay and never under Secure Input, where the
+    /// watching monitor is blind.
+    func setReviewKeys(_ keys: AppState.ReviewKeys) {
+        reviewActive = keys != .off
+        KeyboardShortcuts.setShortcut(keys == .armed ? .init(.return) : nil, for: .confirmReview)
     }
 
     /// §4.2 cancel (Esc by default): an observe-only NSEvent monitor, not a

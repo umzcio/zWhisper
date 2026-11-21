@@ -15,17 +15,24 @@ struct ModelPin: Decodable, Sendable, Equatable {
     let prefix: String
     /// Folder-relative path → lowercase hex SHA-256.
     let files: [String: String]
+    /// Top-level components the loader can do without (e.g. the CTC repo's
+    /// CtcHead.mlmodelc, which FluidAudio never fetches). Each is all or
+    /// nothing; every other pinned file must be present.
+    let optional: [String]?
 }
 
 enum ModelIntegrityError: LocalizedError, Equatable {
     case unpinned(String)
     case mismatch(file: String)
     case unexpected(file: String)
+    case incomplete(file: String)
 
     var errorDescription: String? {
         switch self {
         case .unpinned(let id):
             "zWhisper has no verified copy of \(id) on record."
+        case .incomplete(let file):
+            "The model download is incomplete (\(file) is missing), so it was removed. Download it again."
         case .mismatch(let file), .unexpected(let file):
             "The downloaded model didn't match the version zWhisper verified (\(file)), so it was removed."
         }
@@ -80,26 +87,46 @@ enum ModelPins {
         }
     }
 
+    struct Expectation {
+        let folder: URL
+        let files: [String: String]
+        let optional: Set<String>
+    }
+
     /// Expected files per local folder for a catalog row.
-    static func expectations(for id: String) throws -> [(folder: URL, files: [String: String])] {
+    static func expectations(for id: String) throws -> [Expectation] {
         var byFolder: [String: [String: String]] = [:]
+        var optional: [String: Set<String>] = [:]
         for pin in try pins(for: id) {
             byFolder[pin.folder, default: [:]].merge(pin.files) { $1 }
+            optional[pin.folder, default: []].formUnion(pin.optional ?? [])
         }
         return try byFolder.keys.sorted().map { name in
             guard let url = folderURL(name, forVariant: id) else { throw ModelIntegrityError.unpinned(id) }
-            return (url, byFolder[name]!)
+            return Expectation(folder: url, files: byFolder[name]!, optional: optional[name] ?? [])
+        }
+    }
+
+    /// Every file the loader needs is on disk (existence only, no hashing):
+    /// a folder left half-written by a failed download isn't "installed".
+    static func isComplete(_ id: String) -> Bool {
+        guard let expectations = try? expectations(for: id) else { return false }
+        return expectations.allSatisfy { expectation in
+            let present = Set(expectation.files.keys.filter {
+                FileManager.default.fileExists(atPath: expectation.folder.appendingPathComponent($0).path(percentEncoded: false))
+            })
+            return missingFile(expected: expectation.files, optional: expectation.optional, present: present) == nil
         }
     }
 
     /// Hashes every folder of a freshly downloaded model. A folder that fails
     /// is deleted (it is untrusted) and the error is rethrown.
     static func verifyDownload(_ id: String) throws {
-        for (folder, files) in try expectations(for: id) {
+        for expectation in try expectations(for: id) {
             do {
-                try verify(folder: folder, expected: files)
+                try verify(folder: expectation.folder, expected: expectation.files, optional: expectation.optional)
             } catch {
-                try? FileManager.default.removeItem(at: folder)
+                try? FileManager.default.removeItem(at: expectation.folder)
                 throw error
             }
         }
@@ -108,27 +135,47 @@ enum ModelPins {
     /// Before loading: a folder already verified against these pins is
     /// trusted; one from an older build (no marker) is hashed once now.
     static func verifyInstalled(_ id: String) throws {
-        for (folder, files) in try expectations(for: id) where !hasMarker(folder: folder, expected: files) {
+        for expectation in try expectations(for: id) where !hasMarker(folder: expectation.folder, expected: expectation.files) {
             do {
-                try verify(folder: folder, expected: files)
+                try verify(folder: expectation.folder, expected: expectation.files, optional: expectation.optional)
             } catch {
-                try? FileManager.default.removeItem(at: folder)
+                try? FileManager.default.removeItem(at: expectation.folder)
                 throw error
             }
         }
     }
 
     /// Every regular file in `folder` (hidden bookkeeping aside) must be pinned
-    /// and match its hash. Pinned files that weren't downloaded are fine — the
-    /// loaders check for the ones they need; anything they read is verified.
-    static func verify(folder: URL, expected: [String: String]) throws {
+    /// and match its hash, and every pinned file must be there, except whole
+    /// optional components. A missing file would otherwise let a library
+    /// fetch its own unpinned copy at load (WhisperKit's tokenizer fallback).
+    static func verify(folder: URL, expected: [String: String], optional: Set<String> = []) throws {
         let files = try regularFiles(in: folder)
         for file in files {
             guard let hash = expected[file.relative] else { throw ModelIntegrityError.unexpected(file: file.relative) }
             guard try sha256(of: file.url) == hash.lowercased() else { throw ModelIntegrityError.mismatch(file: file.relative) }
         }
+        if let missing = missingFile(expected: expected, optional: optional, present: Set(files.map(\.relative))) {
+            throw ModelIntegrityError.incomplete(file: missing)
+        }
         try Data(marker(expected: expected, files: files).utf8)
             .write(to: folder.appendingPathComponent(markerName), options: .atomic)
+    }
+
+    /// First pinned file that is absent: required files must all be present;
+    /// an optional component is either entirely present or entirely absent.
+    private static func missingFile(expected: [String: String], optional: Set<String>, present: Set<String>) -> String? {
+        var partial: [String: [String]] = [:]
+        for file in expected.keys.sorted() where !present.contains(file) {
+            let component = String(file.split(separator: "/", maxSplits: 1).first ?? "")
+            guard optional.contains(component) else { return file }
+            partial[component, default: []].append(file)
+        }
+        for (component, missing) in partial.sorted(by: { $0.key < $1.key }) {
+            let total = expected.keys.filter { $0.split(separator: "/", maxSplits: 1).first.map(String.init) == component }.count
+            if missing.count < total { return missing[0] }
+        }
+        return nil
     }
 
     /// The marker stands only while the pins and every file's size, mtime and

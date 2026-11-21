@@ -1,6 +1,7 @@
 import AVFAudio
 import AVFoundation
 import AppKit
+import Carbon.HIToolbox
 import LaunchAtLogin
 import SwiftUI
 
@@ -21,6 +22,7 @@ enum DictationPhase: Equatable {
 
 /// A context-mode result waiting for the user's go-ahead (PasteGuard).
 struct PendingReview: Equatable {
+    let id = UUID()
     let raw: String
     let processed: String
     let mode: Mode
@@ -151,10 +153,29 @@ final class AppState {
     private(set) var pasteSubtitle = ""
     /// The result awaiting Return/Esc while phase is `.reviewing`.
     private(set) var pendingReview: PendingReview?
-    /// Claims bare Return (exclusively) while a review is pending, and arms
-    /// the any-other-key discard; HotkeyManager implements both.
-    var setReviewKeysEnabled: ((Bool) -> Void)?
+    /// What the keyboard does while a review is pending; HotkeyManager
+    /// implements it (the any-key discard monitor and the Return hotkey).
+    enum ReviewKeys: Equatable {
+        /// No review: nothing claimed or watched.
+        case off
+        /// Any key but Esc discards; Return is not claimed (arming delay, or
+        /// Secure Input hides keystrokes so a discard couldn't be seen).
+        case watching
+        /// As `watching`, and bare Return pastes.
+        case armed
+    }
+    var setReviewKeys: ((ReviewKeys) -> Void)?
+    /// Return confirms the pending review (false: only the Paste button does).
+    private(set) var reviewReturnArmed = false
+    /// Secure Input is on, so Return isn't claimed and keystrokes can't be watched.
+    private(set) var reviewSecureInput = false
+    /// Return isn't claimed for this long after a review appears, so a
+    /// keystroke already in flight can't confirm it.
+    var reviewArmDelay: Duration = .milliseconds(500)
+    /// A review nobody answers is discarded (kept in History) after this.
+    var reviewExpiry: Duration = .seconds(120)
     private var reviewAppObserver: NSObjectProtocol?
+    private var reviewWatchTask: Task<Void, Never>?
 
     // MARK: Modes (M5–M6)
 
@@ -216,11 +237,16 @@ final class AppState {
     private var transcriptionTask: Task<Void, Never>?
     /// History entry the current result toast/reprocess belongs to (§6.3).
     private var lastHistoryEntryID: UUID?
+    /// Bumped whenever a pipeline (a recording or a reprocess) takes over the
+    /// state machine; an older pipeline that finishes late can't deliver.
+    private var session = 0
     /// True between a start trigger and `phase = .recording`; closes the
     /// double-start window while permission/engine awaits are in flight.
     private let cloudAPIKey: @Sendable (String) -> String?
     private let captureContext: @Sendable (Bool, Bool) async -> CapturedContext?
     private let makeCloudTranscriber: @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing
+    private let secureInputEnabled: @MainActor () -> Bool
+    private let focusedElement: @MainActor () -> AnyHashable?
     private var startInFlight = false
     private var metering = false
 
@@ -243,8 +269,12 @@ final class AppState {
         },
         makeCloudTranscriber: @escaping @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing = {
             CloudTranscriber(provider: $0, apiKey: $1, server: $2)
-        }
+        },
+        secureInputEnabled: @escaping @MainActor () -> Bool = { IsSecureEventInputEnabled() },
+        focusedElement: @escaping @MainActor () -> AnyHashable? = AppState.systemFocusedElement
     ) {
+        // Pinned FluidAudio revisions are in effect before any FluidAudio call.
+        _ = ModelPins.installFluidRevisions
         self.audio = audio
         self.transcription = transcription
         self.modeProcessor = modeProcessor
@@ -254,6 +284,19 @@ final class AppState {
         self.cloudAPIKey = cloudAPIKey
         self.captureContext = captureContext
         self.makeCloudTranscriber = makeCloudTranscriber
+        self.secureInputEnabled = secureInputEnabled
+        self.focusedElement = focusedElement
+    }
+
+    /// The focused UI element system-wide (Accessibility), compared to tell
+    /// when the user moves to another field or window during a review.
+    static func systemFocusedElement() -> AnyHashable? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &value
+        )
+        guard result == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AnyHashable(value as! AXUIElement)
     }
 
     /// The AVCaptureDevice path is what zMeet (same team ID) ships — proven to
@@ -654,6 +697,11 @@ final class AppState {
 
     func loadHistory() async {
         history = (try? await persistence.load([HistoryEntry].self, from: "history.json")) ?? []
+        // Recordings no History entry points to (cancelled or failed
+        // dictations, including ones older builds left behind) are removed.
+        var keep = Set(history.compactMap(\.audioPath))
+        if let current = await audio.sessionAudioRelativePath { keep.insert(current) }
+        await persistence.removeUnreferencedAudio(keeping: keep)
     }
 
     /// Newest first, soft-capped at 1000 entries (§7).
@@ -815,13 +863,20 @@ final class AppState {
     /// the next mode in cycle order, reprocess the same utterance, re-paste.
     /// Valid from `pasted` (toast is up) and `idle` (toast outlives the popover).
     func reprocess() {
-        guard let transcript = lastTranscript else { return }
+        guard let transcript = lastTranscript, !startInFlight else { return }
         switch phase {
         case .idle, .pasted: break
         default: return
         }
         setActiveMode(nextModeInCycle(after: activeMode))
         toast?.dismiss()
+        // Claim the state machine now: a start trigger arriving during the
+        // clipboard undo below sees a busy phase and is refused.
+        session += 1
+        let mine = session
+        let context = capturedContext
+        phase = .processing
+        processedText = ""
         summonPopover()
         transcriptionTask = Task { @MainActor in
             // Only a real ⌘V paste has something to undo (AX-degraded and
@@ -829,7 +884,7 @@ final class AppState {
             if let receipt = lastPasteReceipt, receipt.didPaste {
                 await paste.undo(receipt)
             }
-            await processAndPaste(transcript, reprocess: true)
+            _ = await processAndPaste(transcript, context: context, reprocess: true, session: mine)
         }
     }
 
@@ -919,6 +974,13 @@ final class AppState {
                 await audio.cancel()
                 return
             }
+            // Something else took over while the engine started: this start loses.
+            guard case .idle = phase else {
+                Self.logToStderr("dictation start abandoned (phase: \(phase))")
+                await audio.cancel()
+                return
+            }
+            session += 1
             phase = .recording(startedAt: .now)
             ZWSoundEffects.play(.recordStart, style: settings.soundEffectsStyle)
             if isDocked {
@@ -966,12 +1028,18 @@ final class AppState {
         // await below would otherwise start a duplicate transcription pipeline
         // and orphan this task's cancellation handle.
         phase = .transcribing
+        let mine = session
         transcriptionTask = Task { @MainActor in
             let sessionAudio = await audio.stop()
             ZWSoundEffects.play(.recordStop, style: settings.soundEffectsStyle)
             lastSessionDuration = Double(sessionAudio.frameLength) / 16_000
-            lastAudioPath = await audio.sessionAudioRelativePath
-            guard case .transcribing = phase else { return } // cancelled during stop
+            let audioPath = await audio.sessionAudioRelativePath
+            lastAudioPath = audioPath
+            // Every exit that leaves no History entry (and no pending review,
+            // which records one) deletes this dictation's recording.
+            var kept = false
+            defer { if !kept { discardRecording(audioPath) } }
+            guard case .transcribing = phase, session == mine else { return } // cancelled during stop
             waveform.beginSettle(now: .now, barCount: popoverSize == .main ? 48 : 28)
             do {
                 let started = ContinuousClock.now
@@ -995,64 +1063,79 @@ final class AppState {
                 phase = .idle
                 return
             }
-            await processAndPaste(transcript)
+            // The context this pipeline sends is fixed here; later writes to
+            // capturedContext (a new dictation) can't change what it reviews.
+            kept = await processAndPaste(transcript, context: capturedContext, reprocess: false, session: mine)
         }
+    }
+
+    /// A dictation that ends without a History entry takes its recording
+    /// with it (nothing else could ever reach or delete the file).
+    private func discardRecording(_ path: String?) {
+        guard let path else { return }
+        if lastAudioPath == path { lastAudioPath = nil }
+        Task { await persistence.deleteFile(path) }
     }
 
     /// §4: Voice Note short-circuits to pasting (§7 identity); other modes
     /// stream the rewrite into the teleprompter (≤700ms to first token, §7).
-    private func processAndPaste(_ transcript: Transcript, reprocess: Bool = false) async {
+    /// Returns true when the result reached History or a pending review.
+    /// `context` is what this pipeline sends to the model; it alone decides
+    /// whether the result is reviewed, and the output is accumulated here,
+    /// never read back from shared state another pipeline could write.
+    private func processAndPaste(_ transcript: Transcript, context: CapturedContext?, reprocess: Bool, session mine: Int) async -> Bool {
         let mode = activeMode
+        let sent = PasteGuard.sentContext(mode: mode, context: context)
         guard !mode.isIdentity else {
-            await pasteAndFinish(raw: transcript.text, processed: transcript.text, mode: mode, reprocess: reprocess)
-            return
+            guard session == mine else { return false }
+            return await pasteAndFinish(raw: transcript.text, processed: transcript.text, mode: mode, reprocess: reprocess, sent: sent)
         }
         phase = .processing
         processedText = ""
         modeProcessingFailed = false
         let started = ContinuousClock.now
         var loggedFirstToken = false
+        var output = ""
         do {
-            for try await chunk in modeProcessor.process(raw: transcript.text, mode: mode, context: capturedContext, personalContext: settings.personalContext) {
-                guard case .processing = phase else { return } // cancelled meanwhile
+            for try await chunk in modeProcessor.process(raw: transcript.text, mode: mode, context: context, personalContext: settings.personalContext) {
+                guard case .processing = phase, session == mine else { return false } // cancelled or superseded
                 if !loggedFirstToken {
                     let elapsed = ContinuousClock.now - started
                     Self.logToStderr("processing first token: \(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)ms (\(mode.name))")
                     loggedFirstToken = true
                 }
+                output = chunk
                 processedText = chunk
             }
         } catch {
-            guard case .processing = phase else { return }
+            guard case .processing = phase, session == mine else { return false }
             modeProcessingFailed = true
             failedModeName = mode.name
             phase = .idle
-            return
+            return false
         }
-        let accumulated = processedText.isEmpty ? transcript.text : processedText
+        guard case .processing = phase, session == mine else { return false }
+        let accumulated = output.isEmpty ? transcript.text : output
         let processed = OutputScrub.stripChatWrappers(accumulated, fallback: transcript.text)
         transcriptText = processed
-        await pasteAndFinish(raw: transcript.text, processed: processed, mode: mode, reprocess: reprocess)
+        return await pasteAndFinish(raw: transcript.text, processed: processed, mode: mode, reprocess: reprocess, sent: sent)
     }
 
     /// §4.3 stop → paste sequence: paste at the caret, "Pasted to {app}",
     /// history entry, result toast (6s), popover closes 700ms after pasted.
-    private func pasteAndFinish(raw: String, processed: String, mode: Mode, reprocess: Bool) async {
+    private func pasteAndFinish(raw: String, processed: String, mode: Mode, reprocess: Bool, sent: PasteGuard.SentContext) async -> Bool {
         // Nothing usable came back (silence, hallucination-free empty pass):
         // no paste, no history entry (§4: cancel-like no-op) — but the flow
-        // is over, so close/collapse like any other completion.
+        // is over, so close/collapse like any other completion. The caller
+        // deletes the recording (a reprocess keeps its entry's).
         guard !processed.isEmpty else {
-            if let path = lastAudioPath {
-                Task { await persistence.deleteFile(path) }
-            }
             phase = .idle
             dismissPopover()
-            return
+            return false
         }
         // Screen context is untrusted: when a mode sent the selection or the
         // clipboard to the model, nothing is typed until the user has read
         // the result and pressed Return (PasteGuard).
-        let sent = PasteGuard.sentContext(mode: mode, context: capturedContext)
         if sent.any {
             beginReview(PendingReview(
                 raw: raw, processed: processed, mode: mode, reprocess: reprocess,
@@ -1060,9 +1143,10 @@ final class AppState {
                 targetApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
                 sent: sent
             ))
-            return
+            return true
         }
         await deliver(raw: raw, processed: processed, mode: mode, reprocess: reprocess)
+        return true
     }
 
     /// Paste (or copy), history, toast, auto-close: the end of every dictation
@@ -1119,7 +1203,9 @@ final class AppState {
         }
     }
 
-    private func recordHistory(raw: String, processed: String, mode: Mode, reprocess: Bool, targetApp: String?) {
+    /// `unreviewed`: a context-mode result discarded from review, never
+    /// approved; History marks it and shows it the way the review does.
+    private func recordHistory(raw: String, processed: String, mode: Mode, reprocess: Bool, targetApp: String?, unreviewed: Bool = false) {
         if reprocess {
             // §6.3 per-entry reprocess history (undo stack). Target the entry
             // this toast belongs to — the user may have deleted it from the
@@ -1129,6 +1215,7 @@ final class AppState {
                 updated.undoStack.append(ProcessedVersion(modeID: last.modeID, text: last.processedText, createdAt: .now))
                 updated.modeID = mode.id
                 updated.processedText = processed
+                updated.unreviewed = unreviewed ? true : nil
                 replaceHistory(updated)
             }
         } else {
@@ -1142,7 +1229,8 @@ final class AppState {
                 audioPath: lastAudioPath,
                 segments: lastTranscript?.segments ?? [],
                 undoStack: [],
-                targetApp: targetApp
+                targetApp: targetApp,
+                unreviewed: unreviewed ? true : nil
             )
             lastHistoryEntryID = entry.id
             appendHistory(entry)
@@ -1166,7 +1254,10 @@ final class AppState {
         // Every size gets the full review layout (Mini has no room for it);
         // the user's size comes back when the review ends.
         popover?.animateReviewFrame()
-        setReviewKeysEnabled?(true)
+        reviewReturnArmed = false
+        reviewSecureInput = secureInputEnabled()
+        setReviewKeys?(.watching)
+        watchReview(review)
         let ownPID = NSRunningApplication.current.processIdentifier
         reviewAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -1181,10 +1272,45 @@ final class AppState {
         }
     }
 
+    /// Arms Return after a short delay, and only while keystrokes can be
+    /// watched: under Secure Input the discard monitors see nothing, so Return
+    /// stays unclaimed and only the Paste button confirms. Moving focus to
+    /// another field or window, or leaving the review unanswered, discards it.
+    private func watchReview(_ review: PendingReview) {
+        reviewWatchTask?.cancel()
+        let focus = focusedElement()
+        let started = ContinuousClock.now
+        reviewWatchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: self?.reviewArmDelay ?? .zero)
+            while let self, !Task.isCancelled, self.pendingReview?.id == review.id {
+                if ContinuousClock.now - started >= self.reviewExpiry {
+                    Self.logToStderr("review expired; discarded to History")
+                    self.discardReview(dismiss: true)
+                    return
+                }
+                if let focus, let now = self.focusedElement(), now != focus {
+                    self.discardReview(dismiss: true)
+                    return
+                }
+                let secure = self.secureInputEnabled()
+                self.reviewSecureInput = secure
+                if self.reviewReturnArmed == secure {
+                    self.reviewReturnArmed = !secure
+                    self.setReviewKeys?(secure ? .watching : .armed)
+                }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        }
+    }
+
     private func endReview() -> PendingReview? {
         guard case .reviewing = phase, let review = pendingReview else { return nil }
         pendingReview = nil
-        setReviewKeysEnabled?(false)
+        reviewWatchTask?.cancel()
+        reviewWatchTask = nil
+        reviewReturnArmed = false
+        reviewSecureInput = false
+        setReviewKeys?(.off)
         popover?.animateFrame(to: popoverSize)
         if let observer = reviewAppObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -1205,7 +1331,7 @@ final class AppState {
     /// result is kept in History so it isn't lost.
     func discardReview(dismiss: Bool = false) {
         guard let review = endReview() else { return }
-        recordHistory(raw: review.raw, processed: review.processed, mode: review.mode, reprocess: review.reprocess, targetApp: nil)
+        recordHistory(raw: review.raw, processed: review.processed, mode: review.mode, reprocess: review.reprocess, targetApp: nil, unreviewed: true)
         phase = .idle
         if dismiss { dismissPopover() }
     }
@@ -1238,9 +1364,8 @@ final class AppState {
             partialText = ""
             transcriptText = ""
             processedText = ""
-            // stop() keeps the session m4a; a cancelled dictation must not
-            // leave it on disk (no history entry references it).
-            Task { await audio.cancel() }
+            // Capture has already stopped; the pipeline sees the phase change
+            // and deletes its own recording (a reprocess keeps its entry's).
         case .reviewing:
             discardReview()
         case .idle, .pasting, .pasted:

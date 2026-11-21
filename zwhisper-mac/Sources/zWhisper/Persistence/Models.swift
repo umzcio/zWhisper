@@ -16,6 +16,10 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     /// Per-entry reprocess history (§6.3 "Undo").
     var undoStack: [ProcessedVersion]
     var targetApp: String?
+    /// True for a context-mode result discarded from the paste review: it
+    /// was never approved, so History marks it and shows it the way the
+    /// review does before it can be copied. nil (absent) otherwise.
+    var unreviewed: Bool?
 }
 
 struct TranscriptSegment: Codable, Equatable, Sendable {

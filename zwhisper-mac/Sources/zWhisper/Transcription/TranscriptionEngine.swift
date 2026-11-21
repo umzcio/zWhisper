@@ -69,6 +69,7 @@ actor TranscriptionEngine: TranscriptionEngineProtocol {
     func loadModel(_ id: String) async throws {
         // Models downloaded by an older build are hashed once against the
         // pins before their first load; a mismatch deletes them (ModelPins).
+        _ = ModelPins.installFluidRevisions
         try ModelPins.verifyInstalled(id)
         let folder = ModelDownloadManager.modelFolder(forVariant: id)
         let onPartial: @Sendable (String) -> Void = { [partialContinuation] in partialContinuation.yield($0) }
@@ -77,6 +78,9 @@ actor TranscriptionEngine: TranscriptionEngineProtocol {
         case .parakeet: try await ParakeetEngine.load(folder: folder, onPartial: onPartial)
         case .nemotron: try await NemotronEngine.load(folder: folder, onPartial: onPartial)
         }
+        // A loader that fetched or rewrote anything (WhisperKit's tokenizer
+        // fallback, FluidAudio's cache refresh) fails here instead of running.
+        try ModelPins.verifyInstalled(id)
         await next.setLanguage(language, translateToEnglish: translateToEnglish)
         await next.setVocabulary(vocabularyWords)
         backend = next
@@ -132,7 +136,17 @@ actor WhisperEngine: SpeechBackend {
     private var translateToEnglish = false
 
     static func load(folder: URL, onPartial: @escaping @Sendable (String) -> Void) async throws -> WhisperEngine {
-        let config = WhisperKitConfig(modelToken: "", modelFolder: folder.path(percentEncoded: false), prewarm: true)
+        // The tokenizer comes only from the verified model folder: WhisperKit
+        // otherwise looks in a shared hub cache first and falls back to an
+        // unpinned download. With tokenizerFolder set to the model folder,
+        // any fallback lands inside it and fails the post-load verification.
+        let config = WhisperKitConfig(
+            modelToken: "",
+            modelFolder: folder.path(percentEncoded: false),
+            tokenizerFolder: folder,
+            prewarm: true,
+            download: false
+        )
         return WhisperEngine(whisperKit: try await WhisperKit(config), onPartial: onPartial)
     }
 

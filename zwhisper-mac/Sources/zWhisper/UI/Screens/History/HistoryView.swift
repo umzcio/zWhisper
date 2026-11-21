@@ -109,6 +109,11 @@ struct HistoryView: View {
                                     isSelected: entry.id == selection,
                                     onPlay: { quickPlay(entry) },
                                     onCopy: {
+                                        // Copy always opens the entry, so what lands on the
+                                        // clipboard is on screen in full. A result never
+                                        // approved in review is copied only from there.
+                                        selection = entry.id
+                                        guard entry.unreviewed != true else { return }
                                         NSPasteboard.general.clearContents()
                                         NSPasteboard.general.setString(entry.processedText, forType: .string)
                                     }
@@ -262,6 +267,7 @@ struct HistoryView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 transport
+                result(entry)
                 transcript(entry)
                 reprocessBarShell
             }
@@ -324,6 +330,46 @@ struct HistoryView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// The text Copy puts on the clipboard, in full, whenever it differs from
+    /// the spoken transcript below. A result discarded from the paste review
+    /// was never approved: it is labelled so and drawn the way the review
+    /// draws it (every line numbered, hidden characters marked).
+    @ViewBuilder
+    private func result(_ entry: HistoryEntry) -> some View {
+        if entry.unreviewed == true {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Not pasted: discarded from review. Check it before copying.", systemImage: "hand.raised.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ZWColor.accentOrange)
+                ReviewText(text: entry.processedText, action: "Copy gives")
+            }
+            .frame(maxHeight: 240)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+        } else if entry.processedText != entry.rawTranscript {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("RESULT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(ZWColor.text3)
+                ScrollView {
+                    Text(entry.processedText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(ZWColor.text1)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .scrollIndicators(.visible)
+                .background(ZWColor.surface2.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .frame(maxHeight: 200)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+        }
     }
 
     /// §6.3 transport: skip ±5s (32px round ghost, mono "5" caption), play/pause
@@ -569,12 +615,14 @@ private struct HistoryRow: View {
         return text.count > 40 ? String(text.prefix(40)) + "…" : text
     }
 
-    /// §6.3 meta: `9:41 AM · 0:38 · 142 words`.
+    /// §6.3 meta: `9:41 AM · 0:38 · 142 words`; "Not pasted" first for a
+    /// result discarded from review.
     private var meta: String {
         let time = entry.createdAt.formatted(date: .omitted, time: .shortened)
         let duration = HistoryView.formatClock(entry.duration)
         let words = entry.processedText.split(separator: " ").count
-        return "\(time) · \(duration) · \(words) words"
+        let base = "\(time) · \(duration) · \(words) words"
+        return entry.unreviewed == true ? "Not pasted · " + base : base
     }
 }
 
