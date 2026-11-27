@@ -3,12 +3,12 @@
     <channel>
         <title>zWhisper</title>
         <item>
-            <title>1.0.24</title>
-            <pubDate>Fri, 20 Nov 2026 22:02:22 -0700</pubDate>
-            <sparkle:version>25</sparkle:version>
-            <sparkle:shortVersionString>1.0.24</sparkle:shortVersionString>
+            <title>1.0.25</title>
+            <pubDate>Thu, 26 Nov 2026 18:05:47 -0700</pubDate>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>1.0.25</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/umzcio/zWhisper/releases/download/v1.0.24/zWhisper-1.0.24.dmg" length="32585383" type="application/octet-stream" sparkle:edSignature="vsq8xBzFh8ro2YqdtNCOpjLT5DJf/POxdt7EZF5vZ7X/X1rbvGEuVoo0RUfvfaYERgEej97mBHEPuwIP0gCdBQ=="/>
+            <enclosure url="https://github.com/umzcio/zWhisper/releases/download/v1.0.25/zWhisper-1.0.25.dmg" length="32586702" type="application/octet-stream" sparkle:edSignature="J8z8JJIG6MWmgKSoGiipaxsKKsb6tLHiF6SKzPI9IRMD2QQKLW+p40dZiC/M4c1ceTxjJ48qIzvyllE/LG7oBw=="/>
         </item>
     </channel>
 </rss>
