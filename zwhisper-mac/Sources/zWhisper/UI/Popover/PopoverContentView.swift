@@ -283,11 +283,12 @@ struct PopoverContentView: View {
             .foregroundStyle(ZWColor.text2)
             .help("Press \(CancelShortcut.current.displayText) to discard")
             Spacer(minLength: 0)
-            // Secure Input hides keystrokes from zWhisper, so Return isn't
-            // claimed and typing can't discard: only the buttons act.
-            Text(appState.reviewSecureInput ? "Secure input on: click to paste" : "Used your \(source)")
-                .font(.system(size: 10, weight: appState.reviewSecureInput ? .medium : .regular))
-                .foregroundStyle(appState.reviewSecureInput ? ZWColor.accentOrange : ZWColor.text2)
+            // Keystrokes were hidden from zWhisper (Secure Input, or no
+            // Accessibility trust) at some point, so typing may not have
+            // discarded this review: Return never confirms it, only the button.
+            Text(appState.reviewClickOnly ? "Typing was hidden: click to paste" : "Used your \(source)")
+                .font(.system(size: 10, weight: appState.reviewClickOnly ? .medium : .regular))
+                .foregroundStyle(appState.reviewClickOnly ? ZWColor.accentOrange : ZWColor.text2)
                 .lineLimit(1)
         }
         .padding(.top, 8)

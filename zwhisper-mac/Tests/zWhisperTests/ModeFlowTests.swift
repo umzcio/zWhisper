@@ -163,6 +163,7 @@ private final class SSEStub: URLProtocol, @unchecked Sendable {
 @MainActor
 final class ReviewEnvironment {
     var secureInput = false
+    var trusted = true
     var focus: AnyHashable?
 }
 
@@ -188,6 +189,7 @@ struct ModeFlowTests {
             requestRecordPermission: { true },
             captureContext: { _, _ in context },
             secureInputEnabled: { environment.secureInput },
+            accessibilityTrusted: { environment.trusted },
             focusedElement: { environment.focus },
             workspaceNotifications: NotificationCenter()
         )
@@ -312,10 +314,38 @@ struct ModeFlowTests {
         #expect(keys.last == .off)
     }
 
-    @Test("under Secure Input Return is never claimed; only a click pastes")
-    func secureInputNeverArms() async throws {
-        environment.secureInput = true
+    @Test("once Secure Input was seen, Return never confirms that review, even after it ends")
+    func secureInputSticks() async throws {
         let (state, _, _, processor, paste) = await makeState(context: thread)
+        var keys: [AppState.ReviewKeys] = []
+        state.setReviewKeys = { keys.append($0) }
+        state.reviewArmDelay = .milliseconds(10)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(keys.last == .armed)
+        // The user types into a secure field: the discard monitor is blind.
+        environment.secureInput = true
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(keys.last == .watching)
+        environment.secureInput = false
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(state.phase == .reviewing)
+        #expect(state.reviewClickOnly)
+        #expect(!state.reviewReturnArmed)
+        #expect(keys.last == .watching) // never re-armed
+        state.confirmReviewWithReturn()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == nil)
+        #expect(paste.copiedText == nil)
+        state.confirmReview() // the Paste button still works
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == processor.chunks.last)
+    }
+
+    @Test("without Accessibility trust the key monitor is blind, so Return is never claimed")
+    func untrustedNeverArms() async throws {
+        environment.trusted = false
+        let (state, _, _, _, paste) = await makeState(context: thread)
         var keys: [AppState.ReviewKeys] = []
         state.setReviewKeys = { keys.append($0) }
         state.reviewArmDelay = .milliseconds(10)
@@ -324,16 +354,29 @@ struct ModeFlowTests {
         try await Task.sleep(for: .milliseconds(200))
         #expect(state.phase == .reviewing)
         #expect(!keys.contains(.armed))
-        #expect(!state.reviewReturnArmed)
-        #expect(state.reviewSecureInput)
-        #expect(paste.pastedText == nil)
-        // Secure Input ends: Return is armed again.
-        environment.secureInput = false
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(keys.last == .armed)
-        state.confirmReview() // the Paste button
+        #expect(state.reviewClickOnly)
+        state.confirmReviewWithReturn()
         try await Task.sleep(for: .milliseconds(100))
-        #expect(paste.pastedText == processor.chunks.last)
+        #expect(paste.pastedText == nil)
+        #expect(paste.copiedText == nil)
+    }
+
+    @Test("Return is re-checked at the keypress: hidden keys between watcher ticks disarm it")
+    func returnRechecksAtKeypress() async throws {
+        let (state, _, _, _, paste) = await makeState(context: thread)
+        var keys: [AppState.ReviewKeys] = []
+        state.setReviewKeys = { keys.append($0) }
+        state.reviewArmDelay = .milliseconds(10)
+        state.setActiveMode(BuiltInModes.email)
+        await dictate(state)
+        #expect(state.reviewReturnArmed)
+        environment.secureInput = true // turned on just now, before the next tick
+        state.confirmReviewWithReturn()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(paste.pastedText == nil)
+        #expect(state.phase == .reviewing)
+        #expect(state.reviewClickOnly)
+        #expect(keys.last == .watching)
     }
 
     @Test("an unanswered review expires into History, unpasted")

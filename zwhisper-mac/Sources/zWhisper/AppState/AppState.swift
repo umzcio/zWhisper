@@ -159,7 +159,7 @@ final class AppState {
         /// No review: nothing claimed or watched.
         case off
         /// Any key but Esc discards; Return is not claimed (arming delay, or
-        /// Secure Input hides keystrokes so a discard couldn't be seen).
+        /// keystrokes were hidden from zWhisper, so a discard couldn't be seen).
         case watching
         /// As `watching`, and bare Return pastes.
         case armed
@@ -167,8 +167,11 @@ final class AppState {
     var setReviewKeys: ((ReviewKeys) -> Void)?
     /// Return confirms the pending review (false: only the Paste button does).
     private(set) var reviewReturnArmed = false
-    /// Secure Input is on, so Return isn't claimed and keystrokes can't be watched.
-    private(set) var reviewSecureInput = false
+    /// Keystrokes were hidden from zWhisper at some point during this review
+    /// (Secure Input on, or no Accessibility trust, which the key monitor
+    /// needs): typing then couldn't discard it, so for the rest of the review
+    /// Return never confirms it and only the Paste button does.
+    private(set) var reviewClickOnly = false
     /// Return isn't claimed for this long after a review appears, so a
     /// keystroke already in flight can't confirm it.
     var reviewArmDelay: Duration = .milliseconds(500)
@@ -246,6 +249,7 @@ final class AppState {
     private let captureContext: @Sendable (Bool, Bool) async -> CapturedContext?
     private let makeCloudTranscriber: @Sendable (CloudTranscriptionProvider, String?, SelfHostedServer?) -> any CloudTranscribing
     private let secureInputEnabled: @MainActor () -> Bool
+    private let accessibilityTrusted: @MainActor () -> Bool
     private let focusedElement: @MainActor () -> AnyHashable?
     /// App-activation notifications (NSWorkspace's in the app; tests pass
     /// their own so other apps on the machine can't end a test's review).
@@ -274,6 +278,7 @@ final class AppState {
             CloudTranscriber(provider: $0, apiKey: $1, server: $2)
         },
         secureInputEnabled: @escaping @MainActor () -> Bool = { IsSecureEventInputEnabled() },
+        accessibilityTrusted: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
         focusedElement: @escaping @MainActor () -> AnyHashable? = AppState.systemFocusedElement,
         workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter
     ) {
@@ -289,6 +294,7 @@ final class AppState {
         self.captureContext = captureContext
         self.makeCloudTranscriber = makeCloudTranscriber
         self.secureInputEnabled = secureInputEnabled
+        self.accessibilityTrusted = accessibilityTrusted
         self.focusedElement = focusedElement
         self.workspaceNotifications = workspaceNotifications
     }
@@ -1281,7 +1287,7 @@ final class AppState {
         // the user's size comes back when the review ends.
         popover?.animateReviewFrame()
         reviewReturnArmed = false
-        reviewSecureInput = secureInputEnabled()
+        reviewClickOnly = !keystrokesVisible()
         setReviewKeys?(.watching)
         watchReview(review)
         let ownPID = NSRunningApplication.current.processIdentifier
@@ -1330,13 +1336,21 @@ final class AppState {
             discardReview(dismiss: true)
             return false
         }
-        let secure = secureInputEnabled()
-        reviewSecureInput = secure
-        if reviewReturnArmed == secure {
-            reviewReturnArmed = !secure
-            setReviewKeys?(secure ? .watching : .armed)
+        // Sticky: keys typed while hidden were never seen by the discard
+        // monitor, so the review can't trust Return again once they were.
+        if !keystrokesVisible() { reviewClickOnly = true }
+        let arm = !reviewClickOnly
+        if reviewReturnArmed != arm {
+            reviewReturnArmed = arm
+            setReviewKeys?(arm ? .armed : .watching)
         }
         return true
+    }
+
+    /// zWhisper sees other keystrokes right now: the global key monitor
+    /// needs Accessibility trust, and Secure Input hides keys from it.
+    private func keystrokesVisible() -> Bool {
+        accessibilityTrusted() && !secureInputEnabled()
     }
 
     private func endReview() -> PendingReview? {
@@ -1345,7 +1359,7 @@ final class AppState {
         reviewWatchTask?.cancel()
         reviewWatchTask = nil
         reviewReturnArmed = false
-        reviewSecureInput = false
+        reviewClickOnly = false
         setReviewKeys?(.off)
         popover?.animateFrame(to: popoverSize)
         if let observer = reviewAppObserver {
@@ -1355,7 +1369,25 @@ final class AppState {
         return review
     }
 
-    /// Return / "Paste": types the reviewed result into the app it was for.
+    /// The Return hotkey. Checked again at the keypress itself, which closes
+    /// the gap between watcher ticks: if keys are hidden now (or were at any
+    /// point), Return does nothing and only the Paste button can confirm.
+    func confirmReviewWithReturn() {
+        guard pendingReview != nil else { return }
+        if !keystrokesVisible() { reviewClickOnly = true }
+        guard reviewReturnArmed, !reviewClickOnly else {
+            Self.logToStderr("review: Return ignored (keystrokes were hidden; click Paste)")
+            if reviewReturnArmed {
+                reviewReturnArmed = false
+                setReviewKeys?(.watching)
+            }
+            return
+        }
+        confirmReview()
+    }
+
+    /// The Paste button (and an armed Return): types the reviewed result into
+    /// the app it was for.
     func confirmReview() {
         guard let review = endReview() else { return }
         Task { @MainActor in

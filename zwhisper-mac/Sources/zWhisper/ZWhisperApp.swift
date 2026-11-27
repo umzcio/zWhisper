@@ -77,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onCancel: { appState.cancel() },
             onCycleMode: { appState.cycleMode() },
             onModeDigit: { appState.switchMode(shortcutIndex: $0) },
-            onConfirmReview: { appState.confirmReview() },
+            onConfirmReview: { appState.confirmReviewWithReturn() },
             onReviewInterrupted: { appState.discardReview(dismiss: true) }
         )
         appState.setReviewKeys = { [hotkeyManager] keys in
